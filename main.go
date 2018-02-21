@@ -43,6 +43,7 @@ const versionNumber string = "v0.2.2"
 var ffmpegCMD = `ffmpeg`
 
 var debug bool
+var maximumConcurrency int
 var twitchClientID = "aokchnui2n8q38g0vezl9hq6htzy4c"
 
 var cleanUpQueue = make([]func(), 0)
@@ -162,7 +163,7 @@ func downloadChunk(newpath string, edgecastBaseURL string, chunkNum string, chun
 }
 
 func createConcatFile(newpath string, chunkNum int, startChunk int, vodID string) (*os.File, error) {
-	tempFile, err := ioutil.TempFile(newpath, "twitchVod_"+vodID+"_")
+	tempFile, err := ioutil.TempFile(newpath, "concat_"+vodID)
 	if err != nil {
 		return nil, err
 	}
@@ -462,7 +463,7 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 		}
 	}
 	downloadStopped := false
-	for i := 0; i < 5; i++ {
+	for i := 0; i < maximumConcurrency; i++ {
 		wg.Add(1)
 		workerID := i
 		go func() {
@@ -523,10 +524,12 @@ func main() {
 	end := flag.String("end", standardStartAndEnd, "For example: 1 20 0 for ending the vod at 1 hour and 20 minutes")
 	quality := flag.String("quality", sourceQuality, "chunked for source quality is automatically used if -quality isn't set")
 	debugFlag := flag.Bool("debug", false, "debug output")
+	maximumConcurrencyFlag := flag.Int("concurrency", 5, "Total amount of allowed concurrency for download")
 
 	flag.Parse()
 
 	debug = *debugFlag
+	maximumConcurrency = *maximumConcurrencyFlag
 
 	if !rightVersion() {
 		fmt.Printf("\nYou are using an old version of concat. Check out %s for the most recent version.\n\n", currentReleaseLink)
