@@ -3,26 +3,29 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"flag"
 	"fmt"
-	"regexp"
-	"github.com/abiosoft/semaphore"
+	"io"
 	"io/ioutil"
 	"net/http"
 	"os"
-	"path/filepath"
 	"os/exec"
+	"os/signal"
+	"path/filepath"
+	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
-	"flag"
-	"runtime"
+	"syscall"
+	"time"
 )
 
 //new style of edgecast links: http://vod089-ttvnw.akamaized.net/1059582120fbff1a392a_reinierboortman_26420932624_719978480/chunked/highlight-180380104.m3u8
 //old style of edgecast links: http://vod164-ttvnw.akamaized.net/7a16586e4b7ef40300ba_zizaran_27258736688_772341213/chunked/index-dvr.m3u8
 
 const edgecastLinkBegin string = "http://"
-const edgecastLinkBaseEndOld string = "index" 
+const edgecastLinkBaseEndOld string = "index"
 const edgecastLinkBaseEnd string = "highlight"
 const edgecastLinkM3U8End string = ".m3u8"
 const targetdurationStart string = "TARGETDURATION:"
@@ -42,7 +45,9 @@ var ffmpegCMD string = `ffmpeg`
 var debug bool
 var twitch_client_id string = "aokchnui2n8q38g0vezl9hq6htzy4c"
 
-var sem = semaphore.New(5)
+var cleanUpQueue = make([]func(), 0)
+var abort = make(chan struct{})
+var wg sync.WaitGroup
 
 /*
 	Returns the signature and token from a tokenAPILink
@@ -131,9 +136,7 @@ func startingChunk(sh int, sm int, ss int, target int) int {
 	return (start_seconds / target)
 }
 
-func downloadChunk(newpath string, edgecastBaseURL string, chunkNum string, chunkName string, vodID string, wg *sync.WaitGroup) {
-	sem.Acquire()
-
+func downloadChunk(newpath string, edgecastBaseURL string, chunkNum string, chunkName string, vodID string) {
 	if debug {
 		fmt.Printf("Downloading: %s\n", edgecastBaseURL + chunkName)
 	} else {
@@ -145,15 +148,16 @@ func downloadChunk(newpath string, edgecastBaseURL string, chunkNum string, chun
 		os.Exit(1)
 	}
 
-	body, err := ioutil.ReadAll(resp.Body)
+	resultFile, err := os.Create(filepath.Join(newpath, vodID+"_"+chunkNum+chunkFileExtension))
 	if err != nil {
+		fmt.Printf("Could not create file '%s'", newpath+"/"+vodID+"_"+chunkNum+chunkFileExtension)
 		os.Exit(1)
 	}
-
-	_ = ioutil.WriteFile(newpath + "/" + vodID+"_"+chunkNum+chunkFileExtension, body, 0644)
-
-	defer wg.Done()
-	sem.Release()
+	defer resultFile.Close()
+	if _, err := io.Copy(resultFile, resp.Body); err != nil {
+		fmt.Printf("Could not download file '%s'. %v", vodID+"_"+chunkNum+chunkFileExtension, err)
+		close(abort)
+	}
 }
 
 func createConcatFile(newpath string, chunkNum int, startChunk int, vodID string) (*os.File, error) {
@@ -162,13 +166,16 @@ func createConcatFile(newpath string, chunkNum int, startChunk int, vodID string
 		return nil, err
 	}
 	defer tempFile.Close()
-	concat := ``
+	concatBuf := bytes.NewBuffer(make([]byte, 0))
 	for i := startChunk; i < (startChunk + chunkNum); i++ {
 		s := strconv.Itoa(i)
+		concatBuf.WriteString("file '")
 		filePath, _ := filepath.Abs(newpath + "/" + vodID + "_" + s + chunkFileExtension)
-		concat += "file '" + filePath + "'\n"
+		concatBuf.WriteString(filePath)
+		concatBuf.WriteRune('\'')
+		concatBuf.WriteRune('\n')
 	}
-
+	concat := concatBuf.String()
 	if _, err := tempFile.WriteString(concat); err != nil {
 		return nil, err
 	}
@@ -181,7 +188,10 @@ func ffmpegCombine(newpath string, chunkNum int, startChunk int, vodID string) {
 		fmt.Println(err)
 		return
 	}
-	defer os.Remove(tempFile.Name())
+	cleanUpQueue = append(cleanUpQueue, func() {
+		os.Remove(tempFile.Name())
+	})
+
 	args := []string{"-f", "concat", "-safe", "0", "-i", tempFile.Name(), "-c", "copy", "-bsf:a", "aac_adtstoasc", "-fflags", "+genpts", vodID + ".mp4"}
 
 	if debug {
@@ -191,7 +201,7 @@ func ffmpegCombine(newpath string, chunkNum int, startChunk int, vodID string) {
 	cmd := exec.Command(ffmpegCMD, args...)
 	var errbuf bytes.Buffer
 	cmd.Stderr = &errbuf
-	err := cmd.Run()
+	err = cmd.Run()
 	if err != nil {
 		fmt.Println(errbuf.String())
 		fmt.Println("ffmpeg error")
@@ -202,9 +212,9 @@ func deleteChunks(newpath string, chunkNum int, startChunk int, vodID string) {
 	var del string
 	for i := startChunk; i < (startChunk + chunkNum); i++ {
 		s := strconv.Itoa(i)
-		del = newpath + "/" + vodID + "_" + s + chunkFileExtension
+		del = filepath.Join(newpath, vodID+"_"+s+chunkFileExtension)
 		err := os.Remove(del)
-		if err != nil {
+		if err != nil && !os.IsNotExist(err) {
 			fmt.Println("Could not delete all chunks, try manually deleting them", err)
 		}
 	}
@@ -375,7 +385,7 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 	} else {
 		edgecastBaseURL = edgecastBaseURL[0 : strings.Index(edgecastBaseURL, edgecastLinkBaseEnd)]
 	}
-	
+
 
 	if debug {
 		fmt.Printf("\nedgecastBaseURL: %s\nm3u8Link: %s\n", edgecastBaseURL, m3u8Link)
@@ -423,10 +433,7 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 		fmt.Printf("\nchunkNum: %v\nstartChunk: %v\n", chunkNum, startChunk)
 	}
 
-	var wg sync.WaitGroup
-	wg.Add(chunkNum)
-
-	newpath := filepath.Join(".", "_" + vodIDString)
+	newpath := filepath.Join(".", "_"+vodIDString)
 
 	err = os.MkdirAll(newpath, os.ModePerm)
 	if err != nil {
@@ -435,29 +442,54 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 	}
 	fmt.Printf("Created temp dir: %s\n", newpath)
 
+	cleanUpQueue = append(cleanUpQueue, func() {
+		fmt.Println("Deleting temp dir")
+		err := os.RemoveAll(newpath)
+		if err != nil {
+			fmt.Println("Error deleting temp dir in one step.")
+			fmt.Println("Deleting chunks")
+			deleteChunks(newpath, chunkNum, startChunk, vodIDString)
+			fmt.Println("Please delete remaining files manually.")
+		}
+	})
+
 	fmt.Println("Starting Download")
-
+	workChan := make(chan func(), startChunk+chunkNum)
 	for i := startChunk; i < (startChunk + chunkNum); i++ {
-
 		s := strconv.Itoa(i)
 		n := m3u8Array[i]
-		go downloadChunk(newpath, edgecastBaseURL, s, n, vodIDString, &wg)
+		workChan <- func() {
+			downloadChunk(newpath, edgecastBaseURL, s, n, vodIDString)
+		}
+	}
+	downloadStopped := false
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		workerID := i
+		go func() {
+			defer wg.Done()
+		loop:
+			for {
+				select {
+				case fn := <-workChan:
+					fn()
+				case <-abort:
+					fmt.Printf("Worker %d: abort\n", workerID)
+					downloadStopped = true
+					break loop
+				default:
+					break loop
+				}
+			}
+		}()
 	}
 	wg.Wait()
-
-	fmt.Println("\nCombining parts")
-
-	ffmpegCombine(newpath, chunkNum, startChunk, vodIDString)
-
-	fmt.Println("Deleting chunks")
-
-	deleteChunks(newpath, chunkNum, startChunk, vodIDString)
-
-	fmt.Println("Deleting temp dir")
-
-	os.Remove(newpath)
-
-	fmt.Println("All done!")
+	if !downloadStopped {
+		fmt.Println("\nCombining parts")
+		ffmpegCombine(newpath, chunkNum, startChunk, vodIDString)
+		cleanUpAndExit()
+		defer fmt.Println("All done!")
+	}
 }
 
 func rightVersion() bool {
@@ -477,7 +509,7 @@ func rightVersion() bool {
 
 func init() {
 	if runtime.GOOS == "windows" {
-	    ffmpegCMD = `ffmpeg.exe`
+		ffmpegCMD = `ffmpeg.exe`
 	}
 }
 
@@ -508,14 +540,37 @@ func main() {
 
 	if *qualityInfo {
 		printQualityOptions(*vodID)
-		os.Exit(1)
+		os.Exit(0)
 	}
 
-	if (*start != standardStartAndEnd && *end != standardStartAndEnd) {
-		downloadPartVOD(*vodID, *start, *end, *quality);
+	startInterruptWatcher()
+	if *start != standardStartAndEnd && *end != standardStartAndEnd {
+		downloadPartVOD(*vodID, *start, *end, *quality)
 	} else {
-		downloadPartVOD(*vodID, "0", "full", *quality);
+		downloadPartVOD(*vodID, "0", "full", *quality)
+	}
+	for {
+		// Sleep until cleanUpAndExit is called
+		time.Sleep(time.Millisecond * 50)
+	}
+}
+func cleanUpAndExit() {
+	fmt.Println("Application closing")
+	fmt.Println("Starting cleanup")
+	for _, fn := range cleanUpQueue {
+		fn()
 	}
 
-	os.Exit(1)
+	os.Exit(0)
+}
+func startInterruptWatcher() {
+	signalChan := make(chan os.Signal, 1)
+	signal.Notify(signalChan, os.Interrupt, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
+
+	go func(c chan os.Signal) {
+		<-c
+		close(abort)
+		wg.Wait()
+		cleanUpAndExit()
+	}(signalChan)
 }
