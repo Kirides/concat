@@ -23,6 +23,7 @@ const usherAPILink = "http://usher.twitch.tv/vod/%v?nauthsig=%v&nauth=%v&allow_s
 // TwitchClientID defines the ID used for interacting with the Twitch-API
 var TwitchClientID = "aokchnui2n8q38g0vezl9hq6htzy4c"
 var debug = false
+var httpClient = http.DefaultClient
 
 // Vod is a struct that enables object-oriented access to the VOD
 type Vod struct {
@@ -38,7 +39,7 @@ type VodQuality struct {
 }
 
 func (vod Vod) GetM3U8ListForQuality(quality string) (string, error) {
-	resp, err := http.Get(vod.apiMap[quality])
+	resp, err := httpClient.Get(vod.apiMap[quality])
 	if err != nil {
 		return "", err
 	}
@@ -70,14 +71,13 @@ func GetVod(id string) (Vod, error) {
 }
 
 func (vod Vod) fetchData() (map[string]interface{}, error) {
-	client := &http.Client{}
 	req, err := http.NewRequest("GET", "https://api.twitch.tv/kraken/videos/"+vod.ID, nil)
 	if err != nil {
 		fmt.Println(err)
 	}
 	req.Header.Add("Accept", "application/json")
 	req.Header.Add("Client-ID", TwitchClientID)
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -123,7 +123,7 @@ func (vod Vod) GetQualityOptions() ([]VodQuality, error) {
 	signature and token are needed for accessing the usher api
 */
 func (vod Vod) AccessTokenAPI() (string, string, error) {
-	resp, err := http.Get(fmt.Sprintf(tokenAPILink, vod.ID, TwitchClientID))
+	resp, err := httpClient.Get(fmt.Sprintf(tokenAPILink, vod.ID, TwitchClientID))
 	if err != nil {
 		return "", "", err
 	}
@@ -175,7 +175,7 @@ func (vod Vod) getEdgecastURLMap() (map[string]string, error) {
 }
 
 func (vod Vod) accessUsherAPIRaw(signature, token string) (string, error) {
-	resp, err := http.Get(fmt.Sprintf(usherAPILink, vod.ID, signature, token))
+	resp, err := httpClient.Get(fmt.Sprintf(usherAPILink, vod.ID, signature, token))
 	if err != nil {
 		return "", err
 	}
@@ -185,4 +185,9 @@ func (vod Vod) accessUsherAPIRaw(signature, token string) (string, error) {
 		return "", err
 	}
 	return string(body), nil
+}
+
+// SetHttpClient sets the used http.Client for api requests
+func SetHttpClient(client *http.Client) {
+	httpClient = client
 }

@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/ArneVogel/concat/vod"
 )
@@ -47,6 +48,7 @@ var cleanUpQueue = make([]func(), 0)
 var abort = make(chan struct{})
 var done = make(chan struct{}, 1)
 var wg sync.WaitGroup
+var httpClient = &http.Client{Timeout: time.Minute}
 
 /*
 	Returns the number of chunks to download based of the start and end time and the target duration of a
@@ -71,7 +73,7 @@ func downloadChunk(newpath string, edgecastBaseURL string, chunkNum string, chun
 		fmt.Print(".")
 	}
 
-	resp, err := http.Get(edgecastBaseURL + chunkName)
+	resp, err := httpClient.Get(edgecastBaseURL + chunkName)
 	if err != nil {
 		os.Exit(1)
 	}
@@ -386,7 +388,7 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 }
 
 func rightVersion() bool {
-	resp, err := http.Get(currentReleaseLink)
+	resp, err := httpClient.Get(currentReleaseLink)
 	if err != nil {
 		fmt.Println("Couldn't access github while checking for most recent release.")
 	}
@@ -425,10 +427,11 @@ func main() {
 	quality := flag.String("quality", sourceQuality, "chunked for source quality is automatically used if -quality isn't set")
 	flag.BoolVar(&debug, "debug", false, "debug output")
 	flag.IntVar(&maximumConcurrency, "concurrency", 5, "Total amount of allowed concurrency for download")
-	flag.BoolVar(&useVideoTitle, "videotitle", false, "When set, video will be named like 'This is my VOD_12345678.mp4'")
+	flag.BoolVar(&useVideoTitle, "videotitle", true, "When set, video will be named like 'This is my VOD_12345678.mp4'")
 	flag.Parse()
 
 	vod.SetDebug(debug)
+	vod.SetHttpClient(httpClient)
 
 	if !rightVersion() {
 		fmt.Printf("\nYou are using an old version of concat. Check out %s for the most recent version.\n\n", currentReleaseLink)
