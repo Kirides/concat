@@ -175,14 +175,14 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 		fmt.Printf("Destination file %s already exists!\n", vodIDString+".mp4")
 		os.Exit(1)
 	}
-	vod, err := vod.GetVod(vodIDString)
+	vodStruct, err := vod.GetVod(vodIDString)
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
 		return
 	}
 
-	edgecastURLmap := vod.GetEdgecastURLMap()
+	edgecastURLmap := vodStruct.GetEdgecastURLMap()
 
 	if debug {
 		fmt.Println(edgecastURLmap)
@@ -257,7 +257,7 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 
 	fmt.Println("Getting Video info")
 
-	m3u8List, err := vod.GetM3U8ListForQuality(quality)
+	m3u8List, err := vodStruct.GetM3U8ListForQuality(quality)
 	if err != nil {
 		fmt.Println("Couldn't download m3u8 list")
 		os.Exit(1)

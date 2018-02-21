@@ -1,8 +1,10 @@
 package vod
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
 	"regexp"
@@ -54,6 +56,22 @@ func GetVod(id string) (Vod, error) {
 	return vod, nil
 }
 
+func (v Vod) fetchData() error {
+	client := &http.Client{}
+	req, err := http.NewRequest("GET", "https://api.twitch.tv/kraken/videos/"+v.ID, nil)
+	if err != nil {
+		fmt.Println(err)
+	}
+	req.Header.Add("Client-ID", TwitchClientID)
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	buf := bytes.NewBuffer(nil)
+	io.Copy(buf, resp.Body)
+	buf.String()
+	return nil
+}
 func (vod Vod) GetQualityOptions() ([]VodQuality, error) {
 	fmt.Println("Contacting Twitch Server")
 
