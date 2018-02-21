@@ -50,6 +50,9 @@ var done = make(chan struct{}, 1)
 var wg sync.WaitGroup
 var httpClient = &http.Client{Timeout: time.Minute}
 
+var totalChunks int
+var chunksCompleted = 0
+
 /*
 	Returns the number of chunks to download based of the start and end time and the target duration of a
 	chunk. Adding 1 to overshoot the end by a bit
@@ -69,24 +72,32 @@ func startingChunk(sh int, sm int, ss int, target int) int {
 func downloadChunk(newpath string, edgecastBaseURL string, chunkNum string, chunkName string, vodID string) {
 	if debug {
 		fmt.Printf("Downloading: %s\n", edgecastBaseURL+chunkName)
-	} else {
-		fmt.Print(".")
 	}
 
 	resp, err := httpClient.Get(edgecastBaseURL + chunkName)
 	if err != nil {
-		os.Exit(1)
+		fmt.Printf("Could not get '%v'\n", err)
+		close(abort)
+		return
 	}
 
 	resultFile, err := os.Create(filepath.Join(newpath, vodID+"_"+chunkNum+chunkFileExtension))
 	if err != nil {
 		fmt.Printf("Could not create file '%s'", newpath+"/"+vodID+"_"+chunkNum+chunkFileExtension)
-		os.Exit(1)
+		close(abort)
+		return
 	}
 	defer resultFile.Close()
 	if _, err := io.Copy(resultFile, resp.Body); err != nil {
 		fmt.Printf("Could not download file '%s'. %v", vodID+"_"+chunkNum+chunkFileExtension, err)
 		close(abort)
+	}
+	chunksCompleted++
+	if !debug {
+		paddingSize := 48
+		percentage := float32(chunksCompleted) / float32(totalChunks)
+		pWidth := (float32(chunksCompleted) / float32(totalChunks)) * float32(paddingSize)
+		fmt.Printf("\r[%s%s] %3.0f%%", strings.Repeat("█", int(pWidth)), strings.Repeat("░", paddingSize-int(pWidth)), percentage*100)
 	}
 }
 
@@ -349,8 +360,9 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 	})
 
 	fmt.Println("Starting Download")
+	totalChunks = chunkNum
 	workChan := make(chan func(), startChunk+chunkNum)
-	for i := startChunk; i < (startChunk + chunkNum); i++ {
+	for i := startChunk; i < startChunk+chunkNum; i++ {
 		s := strconv.Itoa(i)
 		n := m3u8Array[i]
 		workChan <- func() {
