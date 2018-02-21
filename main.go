@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/ArneVogel/concat/vod"
+	"golang.org/x/crypto/ssh/terminal"
 )
 
 //new style of edgecast links: http://vod089-ttvnw.akamaized.net/1059582120fbff1a392a_reinierboortman_26420932624_719978480/chunked/highlight-180380104.m3u8
@@ -43,6 +44,7 @@ var ffmpegCMD = `ffmpeg`
 var debug bool
 var maximumConcurrency int
 var useVideoTitle bool
+var noProgress bool
 
 var cleanUpQueue = make([]func(), 0)
 var abort = make(chan struct{})
@@ -93,8 +95,14 @@ func downloadChunk(newpath string, edgecastBaseURL string, chunkNum string, chun
 		close(abort)
 	}
 	chunksCompleted++
-	if !debug {
-		paddingSize := 48
+	if !debug && !noProgress {
+		w, _, err := terminal.GetSize(int(os.Stdout.Fd()))
+		if err != nil {
+			w = 50
+		} else {
+			w -= 8 // Brackets + space + percentage-Value + percentage-sign + 1
+		}
+		paddingSize := w
 		percentage := float32(chunksCompleted) / float32(totalChunks)
 		pWidth := (float32(chunksCompleted) / float32(totalChunks)) * float32(paddingSize)
 		fmt.Printf("\r[%s%s] %3.0f%%", strings.Repeat("█", int(pWidth)), strings.Repeat("░", paddingSize-int(pWidth)), percentage*100)
@@ -440,11 +448,12 @@ func main() {
 	flag.BoolVar(&debug, "debug", false, "debug output")
 	flag.IntVar(&maximumConcurrency, "concurrency", 5, "Total amount of allowed concurrency for download")
 	flag.BoolVar(&useVideoTitle, "videotitle", true, "When set, video will be named like 'This is my VOD_12345678.mp4'")
+	flag.BoolVar(&noProgress, "no-progress", false, "When set, video will be named like 'This is my VOD_12345678.mp4'")
 	flag.Parse()
 
 	httpClient.Transport = &http.Transport{
 		MaxIdleConnsPerHost: maximumConcurrency,
-		MaxIdleConns:        maximumConcurrency,
+		// MaxIdleConns:        maximumConcurrency,
 	}
 	vod.SetDebug(debug)
 	vod.SetHttpClient(httpClient)
