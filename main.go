@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -18,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+
+	"github.com/ArneVogel/concat/vod"
 )
 
 //new style of edgecast links: http://vod089-ttvnw.akamaized.net/1059582120fbff1a392a_reinierboortman_26420932624_719978480/chunked/highlight-180380104.m3u8
@@ -29,10 +30,6 @@ const edgecastLinkBaseEnd string = "highlight"
 const edgecastLinkM3U8End string = ".m3u8"
 const targetdurationStart string = "TARGETDURATION:"
 const targetdurationEnd string = "\n#ID3"
-const resolutionStart string = `NAME="`
-const resolutionEnd string = `"`
-const qualityStart string = `VIDEO="`
-const qualityEnd string = `"`
 const sourceQuality string = "chunked"
 const chunkFileExtension string = ".ts"
 const currentReleaseLink string = "https://github.com/ArneVogel/concat/releases/latest"
@@ -44,83 +41,11 @@ var ffmpegCMD = `ffmpeg`
 
 var debug bool
 var maximumConcurrency int
-var twitchClientID = "aokchnui2n8q38g0vezl9hq6htzy4c"
 
 var cleanUpQueue = make([]func(), 0)
 var abort = make(chan struct{})
 var done = make(chan struct{}, 1)
 var wg sync.WaitGroup
-
-/*
-	Returns the signature and token from a tokenAPILink
-	signature and token are needed for accessing the usher api
-*/
-func accessTokenAPI(tokenAPILink string) (string, string, error) {
-	if debug {
-		fmt.Printf("\ntokenAPILink: %s\n", tokenAPILink)
-	}
-
-	resp, err := http.Get(tokenAPILink)
-	if err != nil {
-		return "", "", err
-	}
-
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return "", "", err
-	}
-
-	// See https://blog.golang.org/json-and-go "Decoding arbitrary data"
-	var data interface{}
-	err = json.Unmarshal(body, &data)
-	m := data.(map[string]interface{})
-	sig := fmt.Sprintf("%v", m["sig"])
-	token := fmt.Sprintf("%v", m["token"])
-	return sig, token, err
-}
-
-func accessUsherAPI(usherAPILink string) (map[string]string, error) {
-	resp, err := http.Get(usherAPILink)
-	if err != nil {
-		return make(map[string]string), err
-	}
-
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return make(map[string]string), err
-	}
-
-	respString := string(body)
-
-	if debug {
-		fmt.Printf("\nUsher API response:\n%s\n", respString)
-	}
-
-	var re = regexp.MustCompile(qualityStart + "([^\"]+)" + qualityEnd + "\n([^\n]+)\n")
-	match := re.FindAllStringSubmatch(respString, -1)
-
-	edgecastURLmap := make(map[string]string)
-
-	for _, element := range match {
-		edgecastURLmap[element[1]] = element[2]
-	}
-
-	return edgecastURLmap, err
-}
-
-func getM3U8List(m3u8Link string) (string, error) {
-	resp, err := http.Get(m3u8Link)
-	if err != nil {
-		return "", err
-	}
-
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-
-	return string(body), err
-}
 
 /*
 	Returns the number of chunks to download based of the start and end time and the target duration of a
@@ -222,55 +147,12 @@ func deleteChunks(newpath string, chunkNum int, startChunk int, vodID string) {
 	}
 }
 
-func printQualityOptions(vodIDString string) {
-	vodID, _ := strconv.Atoi(vodIDString)
-
-	tokenAPILink := fmt.Sprintf("http://api.twitch.tv/api/vods/%v/access_token?&client_id="+twitchClientID, vodID)
-
-	fmt.Println("Contacting Twitch Server")
-
-	sig, token, err := accessTokenAPI(tokenAPILink)
-	if err != nil {
-		fmt.Println("Couldn't access twitch token api")
-		os.Exit(1)
-	}
-
-	usherAPILink := fmt.Sprintf("http://usher.twitch.tv/vod/%v?nauthsig=%v&nauth=%v&allow_source=true", vodID, sig, token)
-
-	resp, err := http.Get(usherAPILink)
-	if err != nil {
-		return
-	}
-
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return
-	}
-
-	respString := string(body)
-
-	qualityCount := strings.Count(respString, resolutionStart)
-	for i := 0; i < qualityCount; i++ {
-		rs := strings.Index(respString, resolutionStart) + len(resolutionStart)
-		re := strings.Index(respString[rs:len(respString)], resolutionEnd) + rs
-		qs := strings.Index(respString, qualityStart) + len(qualityStart)
-		qe := strings.Index(respString[qs:len(respString)], qualityEnd) + qs
-
-		fmt.Printf("resolution: %s, download with -quality=\"%s\"\n", respString[rs:re], respString[qs:qe])
-
-		respString = respString[qe:len(respString)]
-	}
-}
-
 func wrongInputNotification() {
 	fmt.Println("Call the program with -help for information on how to use it :^)")
 }
 
 func downloadPartVOD(vodIDString string, start string, end string, quality string) {
-	var vodID, vodSH, vodSM, vodSS, vodEH, vodEM, vodES int
-
-	vodID, _ = strconv.Atoi(vodIDString)
-
+	var vodSH, vodSM, vodSS, vodEH, vodEM, vodES int
 	if end != "full" {
 		startArray := strings.Split(start, " ")
 		endArray := strings.Split(end, " ")
@@ -293,32 +175,14 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 		fmt.Printf("Destination file %s already exists!\n", vodIDString+".mp4")
 		os.Exit(1)
 	}
-
-	tokenAPILink := fmt.Sprintf("http://api.twitch.tv/api/vods/%v/access_token?&client_id="+twitchClientID, vodID)
-
-	fmt.Println("Contacting Twitch Server")
-
-	sig, token, err := accessTokenAPI(tokenAPILink)
+	vod, err := vod.GetVod(vodIDString)
 	if err != nil {
-		fmt.Println("Couldn't access twitch token api")
+		fmt.Println(err)
 		os.Exit(1)
+		return
 	}
 
-	if debug {
-		fmt.Printf("\nSig: %s, Token: %s\n", sig, token)
-	}
-
-	usherAPILink := fmt.Sprintf("http://usher.twitch.tv/vod/%v?nauthsig=%v&nauth=%v&allow_source=true", vodID, sig, token)
-
-	if debug {
-		fmt.Printf("\nusherAPILink: %s\n", usherAPILink)
-	}
-
-	edgecastURLmap, err := accessUsherAPI(usherAPILink)
-	if err != nil {
-		fmt.Println("Count't access usher api")
-		os.Exit(1)
-	}
+	edgecastURLmap := vod.GetEdgecastURLMap()
 
 	if debug {
 		fmt.Println(edgecastURLmap)
@@ -393,7 +257,7 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 
 	fmt.Println("Getting Video info")
 
-	m3u8List, err := getM3U8List(m3u8Link)
+	m3u8List, err := vod.GetM3U8ListForQuality(quality)
 	if err != nil {
 		fmt.Println("Couldn't download m3u8 list")
 		os.Exit(1)
@@ -507,6 +371,13 @@ func rightVersion() bool {
 	return respString[cs:ce] == versionNumber
 }
 
+func printQualityOptions(qualityOptions []vod.VodQuality) {
+	for _, v := range qualityOptions {
+		// fmt.Printf("resolution: %s, download with -quality=\"%s\"\n", v.Resolution, v.Quality)
+		fmt.Printf(`%-8s => -quality="%s"`+"\n", v.Resolution, v.Quality)
+	}
+}
+
 func init() {
 	if runtime.GOOS == "windows" {
 		ffmpegCMD = `ffmpeg.exe`
@@ -530,6 +401,7 @@ func main() {
 
 	debug = *debugFlag
 	maximumConcurrency = *maximumConcurrencyFlag
+	vod.SetDebug(debug)
 
 	if !rightVersion() {
 		fmt.Printf("\nYou are using an old version of concat. Check out %s for the most recent version.\n\n", currentReleaseLink)
@@ -541,7 +413,15 @@ func main() {
 	}
 
 	if *qualityInfo {
-		printQualityOptions(*vodID)
+		vod, err := vod.GetVod(*vodID)
+		if err != nil {
+			os.Exit(1)
+		}
+		qualityOptions, err := vod.GetQualityOptions()
+		if err != nil {
+			os.Exit(1)
+		}
+		printQualityOptions(qualityOptions)
 		os.Exit(0)
 	}
 
@@ -570,6 +450,7 @@ func startInterruptWatcher() {
 
 	go func(c chan os.Signal) {
 		<-c
+		fmt.Println("Received abortion signal")
 		close(abort)
 		wg.Wait()
 		cleanUpAndExit()
