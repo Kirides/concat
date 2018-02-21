@@ -430,6 +430,10 @@ func main() {
 	flag.BoolVar(&useVideoTitle, "videotitle", true, "When set, video will be named like 'This is my VOD_12345678.mp4'")
 	flag.Parse()
 
+	httpClient.Transport = &http.Transport{
+		MaxIdleConnsPerHost: maximumConcurrency,
+		MaxIdleConns:        maximumConcurrency,
+	}
 	vod.SetDebug(debug)
 	vod.SetHttpClient(httpClient)
 
