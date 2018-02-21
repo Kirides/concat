@@ -18,7 +18,6 @@ import (
 	"strings"
 	"sync"
 	"syscall"
-	"time"
 )
 
 //new style of edgecast links: http://vod089-ttvnw.akamaized.net/1059582120fbff1a392a_reinierboortman_26420932624_719978480/chunked/highlight-180380104.m3u8
@@ -48,6 +47,7 @@ var twitchClientID = "aokchnui2n8q38g0vezl9hq6htzy4c"
 
 var cleanUpQueue = make([]func(), 0)
 var abort = make(chan struct{})
+var done = make(chan struct{}, 1)
 var wg sync.WaitGroup
 
 /*
@@ -548,20 +548,19 @@ func main() {
 	} else {
 		downloadPartVOD(*vodID, "0", "full", *quality)
 	}
-	for {
-		// Sleep until cleanUpAndExit is called
-		time.Sleep(time.Millisecond * 50)
-	}
+	// Wait until cleanUpAndExit is called
+	<-done
 }
+
 func cleanUpAndExit() {
 	fmt.Println("Application closing")
 	fmt.Println("Starting cleanup")
 	for _, fn := range cleanUpQueue {
 		fn()
 	}
-
-	os.Exit(0)
+	close(done)
 }
+
 func startInterruptWatcher() {
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, os.Interrupt, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
