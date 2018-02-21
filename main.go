@@ -41,6 +41,7 @@ var ffmpegCMD = `ffmpeg`
 
 var debug bool
 var maximumConcurrency int
+var useVideoTitle bool
 
 var cleanUpQueue = make([]func(), 0)
 var abort = make(chan struct{})
@@ -87,8 +88,8 @@ func downloadChunk(newpath string, edgecastBaseURL string, chunkNum string, chun
 	}
 }
 
-func createConcatFile(newpath string, chunkNum int, startChunk int, vodID string) (*os.File, error) {
-	tempFile, err := ioutil.TempFile(newpath, "concat_"+vodID)
+func createConcatFile(newpath string, chunkNum int, startChunk int, v vod.Vod) (*os.File, error) {
+	tempFile, err := ioutil.TempFile(newpath, "concat_"+v.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -97,7 +98,7 @@ func createConcatFile(newpath string, chunkNum int, startChunk int, vodID string
 	for i := startChunk; i < (startChunk + chunkNum); i++ {
 		s := strconv.Itoa(i)
 		concatBuf.WriteString("file '")
-		filePath, _ := filepath.Abs(newpath + "/" + vodID + "_" + s + chunkFileExtension)
+		filePath, _ := filepath.Abs(newpath + "/" + v.ID + "_" + s + chunkFileExtension)
 		concatBuf.WriteString(filePath)
 		concatBuf.WriteRune('\'')
 		concatBuf.WriteRune('\n')
@@ -109,8 +110,16 @@ func createConcatFile(newpath string, chunkNum int, startChunk int, vodID string
 	return tempFile, nil
 }
 
-func ffmpegCombine(newpath string, chunkNum int, startChunk int, vodID string) {
-	tempFile, err := createConcatFile(newpath, chunkNum, startChunk, vodID)
+func sanitizeFilename(fileName string) string {
+	invalidLetters := [...]string{`?`, `\`, `/`, `:`, `*`, `>`, `<`, `|`, "\x00"}
+	sanitized := fileName
+	for _, l := range invalidLetters {
+		sanitized = strings.Replace(sanitized, l, "", -1)
+	}
+	return sanitized
+}
+func ffmpegCombine(newpath string, chunkNum int, startChunk int, v vod.Vod) {
+	tempFile, err := createConcatFile(newpath, chunkNum, startChunk, v)
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -119,7 +128,12 @@ func ffmpegCombine(newpath string, chunkNum int, startChunk int, vodID string) {
 		os.Remove(tempFile.Name())
 	})
 
-	args := []string{"-f", "concat", "-safe", "0", "-i", tempFile.Name(), "-c", "copy", "-bsf:a", "aac_adtstoasc", "-fflags", "+genpts", vodID + ".mp4"}
+	videoName := v.ID
+	if useVideoTitle && v.Title != "" {
+		videoName = fmt.Sprintf(`%s_%s`, sanitizeFilename(v.Title), v.ID)
+	}
+
+	args := []string{"-f", "concat", "-safe", "0", "-i", tempFile.Name(), "-c", "copy", "-bsf:a", "aac_adtstoasc", "-fflags", "+genpts", fmt.Sprintf(`%s.mp4`, videoName)}
 
 	if debug {
 		fmt.Printf("Running ffmpeg: %s %s\n", ffmpegCMD, args)
@@ -169,17 +183,32 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 		}
 	}
 
-	_, err := os.Stat(vodIDString + ".mp4")
-
-	if err == nil || !os.IsNotExist(err) {
-		fmt.Printf("Destination file %s already exists!\n", vodIDString+".mp4")
-		os.Exit(1)
+	if !useVideoTitle {
+		_, err := os.Stat(vodIDString + ".mp4")
+		if err == nil || !os.IsNotExist(err) {
+			fmt.Printf("Destination file \"%s\" already exists!\n", vodIDString+".mp4")
+			os.Exit(1)
+		}
 	}
+
 	vodStruct, err := vod.GetVod(vodIDString)
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
 		return
+	}
+
+	if useVideoTitle {
+		formatString := `%s_%s.mp4`
+		if vodStruct.Title == "" { // If for some reason, the title could not be fetched
+			formatString = `%s%s.mp4`
+		}
+		fileName := fmt.Sprintf(formatString, sanitizeFilename(vodStruct.Title), vodStruct.ID)
+		_, err := os.Stat(fileName)
+		if err == nil || !os.IsNotExist(err) {
+			fmt.Printf("Destination file \"%s\" already exists!\n", fileName)
+			os.Exit(1)
+		}
 	}
 
 	edgecastURLmap := vodStruct.GetEdgecastURLMap()
@@ -350,7 +379,7 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 	wg.Wait()
 	if !downloadStopped {
 		fmt.Println("\nCombining parts")
-		ffmpegCombine(newpath, chunkNum, startChunk, vodIDString)
+		ffmpegCombine(newpath, chunkNum, startChunk, vodStruct)
 		cleanUpAndExit()
 		defer fmt.Println("All done!")
 	}
@@ -394,13 +423,11 @@ func main() {
 	start := flag.String("start", standardStartAndEnd, "For example: 0 0 0 for starting at the bedinning of the vod")
 	end := flag.String("end", standardStartAndEnd, "For example: 1 20 0 for ending the vod at 1 hour and 20 minutes")
 	quality := flag.String("quality", sourceQuality, "chunked for source quality is automatically used if -quality isn't set")
-	debugFlag := flag.Bool("debug", false, "debug output")
-	maximumConcurrencyFlag := flag.Int("concurrency", 5, "Total amount of allowed concurrency for download")
-
+	flag.BoolVar(&debug, "debug", false, "debug output")
+	flag.IntVar(&maximumConcurrency, "concurrency", 5, "Total amount of allowed concurrency for download")
+	flag.BoolVar(&useVideoTitle, "videotitle", false, "When set, video will be named like 'This is my VOD_12345678.mp4'")
 	flag.Parse()
 
-	debug = *debugFlag
-	maximumConcurrency = *maximumConcurrencyFlag
 	vod.SetDebug(debug)
 
 	if !rightVersion() {

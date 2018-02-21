@@ -27,7 +27,7 @@ func TestAccessUsherAPI(t *testing.T) {
 	vod.TwitchClientID = "aokchnui2n8q38g0vezl9hq6htzy4c"
 	testVod, _ := vod.GetVod(vodString)
 
-	edgecastURLmap, err := testVod.GetEdgecastURLMap()
+	edgecastURLmap := testVod.GetEdgecastURLMap()
 
 	m3u8Link, _ := edgecastURLmap["chunked"]
 
@@ -41,7 +41,7 @@ func TestAccessUsherAPI(t *testing.T) {
 	baseURLEnd := "903cba256ea3055674be_reckful_26660278144_734937575/chunked/"
 	//Same with m3u8 Link
 	m3u8LinkEnd := "/903cba256ea3055674be_reckful_26660278144_734937575/chunked/index-dvr.m3u8"
-	if err != nil || edgecastBaseURL[len(edgecastBaseURL)-len(baseURLEnd):] != baseURLEnd || m3u8Link[len(m3u8Link)-len(m3u8LinkEnd):] != m3u8LinkEnd {
+	if edgecastBaseURL[len(edgecastBaseURL)-len(baseURLEnd):] != baseURLEnd || m3u8Link[len(m3u8Link)-len(m3u8LinkEnd):] != m3u8LinkEnd {
 		t.Errorf("Error in AccessUsherAPI, got baseUrl: %s, m3u8Link: %s", edgecastBaseURL, m3u8Link)
 	}
 }

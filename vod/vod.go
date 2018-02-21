@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
+	"reflect"
 	"regexp"
 	"strings"
 )
@@ -19,13 +20,18 @@ const qualityEnd = `"`
 const tokenAPILink = "http://api.twitch.tv/api/vods/%v/access_token?&client_id=%v"
 const usherAPILink = "http://usher.twitch.tv/vod/%v?nauthsig=%v&nauth=%v&allow_source=true"
 
+// TwitchClientID defines the ID used for interacting with the Twitch-API
 var TwitchClientID = "aokchnui2n8q38g0vezl9hq6htzy4c"
 var debug = false
 
+// Vod is a struct that enables object-oriented access to the VOD
 type Vod struct {
 	ID     string
 	apiMap map[string]string
+	Title  string
 }
+
+// VodQuality a struct that contains quality values of a VOD
 type VodQuality struct {
 	Resolution string
 	Quality    string
@@ -45,6 +51,7 @@ func (vod Vod) GetM3U8ListForQuality(quality string) (string, error) {
 	return string(body), err
 }
 
+// GetVod returns a Vod-Struct that
 func GetVod(id string) (Vod, error) {
 	vod := Vod{ID: id}
 	apiMap, err := vod.getEdgecastURLMap()
@@ -53,24 +60,35 @@ func GetVod(id string) (Vod, error) {
 	}
 	vod.apiMap = apiMap
 
+	if data, err := vod.fetchData(); err == nil {
+		title, ok := data["title"]
+		if ok && reflect.TypeOf(title).Kind() == reflect.String {
+			vod.Title = title.(string)
+		}
+	}
 	return vod, nil
 }
 
-func (v Vod) fetchData() error {
+func (vod Vod) fetchData() (map[string]interface{}, error) {
 	client := &http.Client{}
-	req, err := http.NewRequest("GET", "https://api.twitch.tv/kraken/videos/"+v.ID, nil)
+	req, err := http.NewRequest("GET", "https://api.twitch.tv/kraken/videos/"+vod.ID, nil)
 	if err != nil {
 		fmt.Println(err)
 	}
+	req.Header.Add("Accept", "application/json")
 	req.Header.Add("Client-ID", TwitchClientID)
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	buf := bytes.NewBuffer(nil)
 	io.Copy(buf, resp.Body)
-	buf.String()
-	return nil
+	var jsonResult interface{}
+	if err := json.Unmarshal(buf.Bytes(), &jsonResult); err != nil {
+		return nil, err
+	}
+
+	return jsonResult.(map[string]interface{}), nil
 }
 func (vod Vod) GetQualityOptions() ([]VodQuality, error) {
 	fmt.Println("Contacting Twitch Server")
