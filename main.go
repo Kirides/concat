@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -46,6 +47,9 @@ var maximumConcurrency int
 var useVideoTitle bool
 var noProgress bool
 
+var m sync.Once
+var ctxt, ctxtAbortFn = context.WithCancel(context.Background())
+var closed = false
 var cleanUpQueue = make([]func(), 0)
 var abort = make(chan struct{})
 var done = make(chan struct{}, 1)
@@ -75,8 +79,14 @@ func downloadChunk(newpath string, edgecastBaseURL string, chunkNum string, chun
 	if debug {
 		fmt.Printf("Downloading: %s\n", edgecastBaseURL+chunkName)
 	}
-
-	resp, err := httpClient.Get(edgecastBaseURL + chunkName)
+	req, err := http.NewRequest("GET", edgecastBaseURL+chunkName, nil)
+	if err != nil {
+		fmt.Printf("Could not reach %s: '%v'\n", edgecastBaseURL+chunkName, err)
+		abortWork()
+		return
+	}
+	req = req.WithContext(ctxt)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		fmt.Printf("Could not get '%v'\n", err)
 		abortWork()
@@ -500,9 +510,12 @@ func cleanUpAndExit() {
 }
 
 func abortWork() {
-	close(abort)
-	wg.Wait()
-	cleanUpAndExit()
+	m.Do(func() {
+		close(abort)
+		ctxtAbortFn()
+		wg.Wait()
+		cleanUpAndExit()
+	})
 }
 
 func startInterruptWatcher() {
