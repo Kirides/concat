@@ -17,8 +17,10 @@ const resolutionEnd = `"`
 
 const qualityStart = `VIDEO="`
 const qualityEnd = `"`
-const tokenAPILink = "http://api.twitch.tv/api/vods/%v/access_token?&client_id=%v"
-const usherAPILink = "http://usher.twitch.tv/vod/%v?nauthsig=%v&nauth=%v&allow_source=true"
+const tokenAPILink = "https://api.twitch.tv/api/vods/%v/access_token?&client_id=%v"
+
+// const usherAPILink = "https://usher.twitch.tv/vod/%v?nauthsig=%v&nauth=%v&allow_source=true"
+const usherAPILink = "https://usher.ttvnw.net/vod/%v?nauthsig=%v&nauth=%v&allow_source=true"
 
 // TwitchClientID defines the ID used for interacting with the Twitch-API
 var TwitchClientID = "aokchnui2n8q38g0vezl9hq6htzy4c"

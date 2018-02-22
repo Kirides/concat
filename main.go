@@ -79,20 +79,20 @@ func downloadChunk(newpath string, edgecastBaseURL string, chunkNum string, chun
 	resp, err := httpClient.Get(edgecastBaseURL + chunkName)
 	if err != nil {
 		fmt.Printf("Could not get '%v'\n", err)
-		close(abort)
+		abortWork()
 		return
 	}
 
 	resultFile, err := os.Create(filepath.Join(newpath, vodID+"_"+chunkNum+chunkFileExtension))
 	if err != nil {
 		fmt.Printf("Could not create file '%s'", newpath+"/"+vodID+"_"+chunkNum+chunkFileExtension)
-		close(abort)
+		abortWork()
 		return
 	}
 	defer resultFile.Close()
 	if _, err := io.Copy(resultFile, resp.Body); err != nil {
 		fmt.Printf("Could not download file '%s'. %v", vodID+"_"+chunkNum+chunkFileExtension, err)
-		close(abort)
+		abortWork()
 	}
 	chunksCompleted++
 	if !debug && !noProgress {
@@ -499,6 +499,12 @@ func cleanUpAndExit() {
 	close(done)
 }
 
+func abortWork() {
+	close(abort)
+	wg.Wait()
+	cleanUpAndExit()
+}
+
 func startInterruptWatcher() {
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, os.Interrupt, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
@@ -506,8 +512,6 @@ func startInterruptWatcher() {
 	go func(c chan os.Signal) {
 		<-c
 		fmt.Println("Received abortion signal")
-		close(abort)
-		wg.Wait()
-		cleanUpAndExit()
+		abortWork()
 	}(signalChan)
 }
