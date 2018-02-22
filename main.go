@@ -75,34 +75,27 @@ func startingChunk(sh int, sm int, ss int, target int) int {
 	return (startSeconds / target)
 }
 
-func downloadChunk(newpath string, edgecastBaseURL string, chunkNum string, chunkName string, vodID string) {
+func downloadChunk(newpath string, edgecastBaseURL string, chunkNum string, chunkName string, vodID string) error {
 	if debug {
 		fmt.Printf("Downloading: %s\n", edgecastBaseURL+chunkName)
 	}
 	req, err := http.NewRequest("GET", edgecastBaseURL+chunkName, nil)
 	if err != nil {
-		fmt.Printf("Could not reach %s: '%v'\n", edgecastBaseURL+chunkName, err)
-		abortWork()
-		return
+		return fmt.Errorf("Could not reach %s: '%v'", edgecastBaseURL+chunkName, err)
 	}
 	req = req.WithContext(ctxt)
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		fmt.Printf("Could not get '%v'\n", err)
-		abortWork()
-		return
+		return fmt.Errorf("Could not get '%v'", err)
 	}
 
 	resultFile, err := os.Create(filepath.Join(newpath, vodID+"_"+chunkNum+chunkFileExtension))
 	if err != nil {
-		fmt.Printf("Could not create file '%s'", newpath+"/"+vodID+"_"+chunkNum+chunkFileExtension)
-		abortWork()
-		return
+		return fmt.Errorf("Could not create file '%s'", newpath+"/"+vodID+"_"+chunkNum+chunkFileExtension)
 	}
 	defer resultFile.Close()
 	if _, err := io.Copy(resultFile, resp.Body); err != nil {
-		fmt.Printf("Could not download file '%s'. %v", vodID+"_"+chunkNum+chunkFileExtension, err)
-		abortWork()
+		return fmt.Errorf("Could not download file '%s'. %v", vodID+"_"+chunkNum+chunkFileExtension, err)
 	}
 	chunksCompleted++
 	if !debug && !noProgress {
@@ -117,6 +110,7 @@ func downloadChunk(newpath string, edgecastBaseURL string, chunkNum string, chun
 		pWidth := (float32(chunksCompleted) / float32(totalChunks)) * float32(paddingSize)
 		fmt.Printf("\r[%s%s] %3.0f%%", strings.Repeat("█", int(pWidth)), strings.Repeat("░", paddingSize-int(pWidth)), percentage*100)
 	}
+	return nil
 }
 
 func createConcatFile(newpath string, chunkNum int, startChunk int, v vod.Vod) (*os.File, error) {
@@ -379,12 +373,12 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 
 	fmt.Println("Starting Download")
 	totalChunks = chunkNum
-	workChan := make(chan func(), startChunk+chunkNum)
+	workChan := make(chan func() error, startChunk+chunkNum)
 	for i := startChunk; i < startChunk+chunkNum; i++ {
 		s := strconv.Itoa(i)
 		n := m3u8Array[i]
-		workChan <- func() {
-			downloadChunk(newpath, edgecastBaseURL, s, n, vodIDString)
+		workChan <- func() error {
+			return downloadChunk(newpath, edgecastBaseURL, s, n, vodIDString)
 		}
 	}
 	downloadStopped := false
@@ -397,24 +391,30 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 			for {
 				select {
 				case fn := <-workChan:
-					fn()
+					if err := fn(); err != nil {
+						fmt.Printf("Worker %d: error: %v\n", workerID, err)
+						downloadStopped = true
+						go abortWork()
+						break loop
+					}
 				case <-abort:
 					fmt.Printf("Worker %d: abort\n", workerID)
 					downloadStopped = true
-					break loop
-				default:
+					go abortWork()
 					break loop
 				}
 			}
 		}()
 	}
+
 	wg.Wait()
-	if !downloadStopped {
-		fmt.Println("\nCombining parts")
-		ffmpegCombine(newpath, chunkNum, startChunk, vodStruct)
-		cleanUpAndExit()
-		defer fmt.Println("All done!")
+	if downloadStopped {
+		return
 	}
+	defer fmt.Println("All done!")
+	fmt.Println("\nCombining parts")
+	ffmpegCombine(newpath, chunkNum, startChunk, vodStruct)
+	cleanUpAndExit()
 }
 
 func rightVersion() bool {
