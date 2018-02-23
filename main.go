@@ -51,7 +51,7 @@ var m sync.Once
 var ctxt, ctxtAbortFn = context.WithCancel(context.Background())
 var closed = false
 var cleanUpQueue = make([]func(), 0)
-var done = make(chan struct{}, 1)
+var done = make(chan struct{})
 var wg sync.WaitGroup
 var httpClient = &http.Client{Timeout: time.Minute}
 
@@ -405,31 +405,31 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 			return downloadChunk(newpath, edgecastBaseURL, s, n, vodIDString)
 		}
 	}
-
+	close(workChan) // Channel is buffered, when drained -> ok = false
 	for i := 0; i < maximumConcurrency && i < cap(workChan); i++ {
 		wg.Add(1)
 		workerID := i
-		go func() {
+		go func(workQueue <-chan func() error, done <-chan struct{}) {
 			defer wg.Done()
-		loop:
 			for {
 				select {
-				case fn := <-workChan:
+				case fn, ok := <-workQueue:
+					if !ok { // No more work
+						return
+					}
 					if err := fn(); err != nil {
 						fmt.Printf("Worker %d: error: %v\n", workerID, err)
 						abortWork()
-						break loop
+						return
 					}
-				case <-ctxt.Done():
+				case <-done:
 					if err := ctxt.Err(); err != nil {
 						fmt.Printf("Worker %d: abort\n", workerID)
 					}
-					break loop
-				default: // No more work
-					break loop
+					return
 				}
 			}
-		}()
+		}(workChan, ctxt.Done())
 	}
 
 	wg.Wait()
