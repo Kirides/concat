@@ -203,6 +203,7 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 		vodES, _ = strconv.Atoi(endArray[2])   //end second
 
 		if (vodSH*3600 + vodSM*60 + vodSS) > (vodEH*3600 + vodEM*60 + vodES) {
+			fmt.Println("Start time is greater than end time!")
 			wrongInputNotification()
 		}
 	}
@@ -211,14 +212,20 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 		_, err := os.Stat(vodIDString + ".mp4")
 		if err == nil || !os.IsNotExist(err) {
 			fmt.Printf("Destination file \"%s\" already exists!\n", vodIDString+".mp4")
-			os.Exit(1)
+			abortWork()
+			return
 		}
 	}
 
 	vodStruct, err := vod.GetVod(vodIDString)
 	if err != nil {
 		fmt.Println(err)
-		os.Exit(1)
+		abortWork()
+		return
+	}
+
+	if err := ctxt.Err(); err != nil {
+		fmt.Println(err)
 		return
 	}
 
@@ -231,7 +238,8 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 		_, err := os.Stat(fileName)
 		if err == nil || !os.IsNotExist(err) {
 			fmt.Printf("Destination file \"%s\" already exists!\n", fileName)
-			os.Exit(1)
+			abortWork()
+			return
 		}
 	}
 
@@ -297,6 +305,12 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 			}
 		}
 	}
+
+	if err := ctxt.Err(); err != nil {
+		fmt.Println(err)
+		return
+	}
+
 	edgecastBaseURL := m3u8Link
 	if strings.Contains(edgecastBaseURL, edgecastLinkBaseEndOld) {
 		edgecastBaseURL = edgecastBaseURL[0:strings.Index(edgecastBaseURL, edgecastLinkBaseEndOld)]
@@ -308,12 +322,18 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 		fmt.Printf("\nedgecastBaseURL: %s\nm3u8Link: %s\n", edgecastBaseURL, m3u8Link)
 	}
 
+	if err := ctxt.Err(); err != nil {
+		fmt.Println(err)
+		return
+	}
+
 	fmt.Println("Getting Video info")
 
 	m3u8List, err := vodStruct.GetM3U8ListForQuality(quality)
 	if err != nil {
 		fmt.Println("Couldn't download m3u8 list")
-		os.Exit(1)
+		abortWork()
+		return
 	}
 
 	if debug {
@@ -350,6 +370,11 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 		fmt.Printf("\nchunkNum: %v\nstartChunk: %v\n", chunkNum, startChunk)
 	}
 
+	if err := ctxt.Err(); err != nil {
+		fmt.Println(err)
+		return
+	}
+
 	newpath := filepath.Join(".", "_"+vodIDString)
 
 	err = os.MkdirAll(newpath, os.ModePerm)
@@ -380,7 +405,7 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 			return downloadChunk(newpath, edgecastBaseURL, s, n, vodIDString)
 		}
 	}
-	downloadStopped := false
+
 	for i := 0; i < maximumConcurrency && i < cap(workChan); i++ {
 		wg.Add(1)
 		workerID := i
@@ -392,14 +417,12 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 				case fn := <-workChan:
 					if err := fn(); err != nil {
 						fmt.Printf("Worker %d: error: %v\n", workerID, err)
-						downloadStopped = true
 						abortWork()
 						break loop
 					}
 				case <-ctxt.Done():
 					if err := ctxt.Err(); err != nil {
 						fmt.Printf("Worker %d: abort\n", workerID)
-						downloadStopped = true
 					}
 					break loop
 				default: // No more work
@@ -410,9 +433,12 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 	}
 
 	wg.Wait()
-	if downloadStopped {
+
+	if err := ctxt.Err(); err != nil {
+		fmt.Println(err)
 		return
 	}
+
 	defer fmt.Println("All done!")
 	fmt.Println("\nCombining parts")
 	ffmpegCombine(newpath, chunkNum, startChunk, vodStruct)
@@ -504,9 +530,11 @@ func main() {
 
 func cleanUpAndExit() {
 	fmt.Println("Application closing")
-	fmt.Println("Starting cleanup")
-	for _, fn := range cleanUpQueue {
-		fn()
+	if len(cleanUpQueue) > 0 {
+		fmt.Println("Starting cleanup")
+		for _, fn := range cleanUpQueue {
+			fn()
+		}
 	}
 	close(done)
 }
