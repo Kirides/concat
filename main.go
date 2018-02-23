@@ -516,7 +516,11 @@ func main() {
 		os.Exit(0)
 	}
 
-	startInterruptWatcher()
+	handleInterrupt(func() {
+		fmt.Println("\nReceived abortion signal")
+		abortWork()
+	})
+
 	if *start != standardStartAndEnd && *end != standardStartAndEnd {
 		downloadPartVOD(*vodID, *start, *end, *quality)
 	} else {
@@ -544,13 +548,12 @@ func abortWork() {
 	})
 }
 
-func startInterruptWatcher() {
+func handleInterrupt(onInterrupt func()) {
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, os.Interrupt, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
 
-	go func(c chan os.Signal) {
+	go func(c <-chan os.Signal) {
 		<-c
-		fmt.Println("\nReceived abortion signal")
-		abortWork()
+		onInterrupt()
 	}(signalChan)
 }
