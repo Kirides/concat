@@ -51,7 +51,6 @@ var m sync.Once
 var ctxt, ctxtAbortFn = context.WithCancel(context.Background())
 var closed = false
 var cleanUpQueue = make([]func(), 0)
-var abort = make(chan struct{})
 var done = make(chan struct{}, 1)
 var wg sync.WaitGroup
 var httpClient = &http.Client{Timeout: time.Minute}
@@ -373,7 +372,7 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 
 	fmt.Println("Starting Download")
 	totalChunks = chunkNum
-	workChan := make(chan func() error, startChunk+chunkNum)
+	workChan := make(chan func() error, chunkNum)
 	for i := startChunk; i < startChunk+chunkNum; i++ {
 		s := strconv.Itoa(i)
 		n := m3u8Array[i]
@@ -382,7 +381,7 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 		}
 	}
 	downloadStopped := false
-	for i := 0; i < maximumConcurrency; i++ {
+	for i := 0; i < maximumConcurrency && i < cap(workChan); i++ {
 		wg.Add(1)
 		workerID := i
 		go func() {
@@ -394,13 +393,14 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 					if err := fn(); err != nil {
 						fmt.Printf("Worker %d: error: %v\n", workerID, err)
 						downloadStopped = true
-						go abortWork()
+						abortWork()
 						break loop
 					}
-				case <-abort:
-					fmt.Printf("Worker %d: abort\n", workerID)
-					downloadStopped = true
-					go abortWork()
+				case <-ctxt.Done():
+					if err := ctxt.Err(); err != nil {
+						fmt.Printf("Worker %d: abort\n", workerID)
+						downloadStopped = true
+					}
 					break loop
 				default: // No more work
 					break loop
@@ -513,9 +513,7 @@ func cleanUpAndExit() {
 
 func abortWork() {
 	m.Do(func() {
-		close(abort)
 		ctxtAbortFn()
-		wg.Wait()
 		cleanUpAndExit()
 	})
 }
