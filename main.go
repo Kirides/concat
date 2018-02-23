@@ -405,7 +405,6 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 			return downloadChunk(newpath, edgecastBaseURL, s, n, vodIDString)
 		}
 	}
-	close(workChan) // Channel is buffered, when drained -> ok = false
 	for i := 0; i < maximumConcurrency && i < cap(workChan); i++ {
 		wg.Add(1)
 		workerID := i
@@ -413,10 +412,7 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 			defer wg.Done()
 			for {
 				select {
-				case fn, ok := <-workQueue:
-					if !ok { // No more work
-						return
-					}
+				case fn := <-workQueue:
 					if err := fn(); err != nil {
 						fmt.Printf("Worker %d: error: %v\n", workerID, err)
 						abortWork()
@@ -426,6 +422,8 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 					if err := ctxt.Err(); err != nil {
 						fmt.Printf("Worker %d: abort\n", workerID)
 					}
+					return
+				default:
 					return
 				}
 			}
