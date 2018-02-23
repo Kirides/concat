@@ -550,7 +550,7 @@ func abortWork() {
 
 func handleInterrupt(onInterrupt func()) {
 	signalChan := make(chan os.Signal, 1)
-	signal.Notify(signalChan, os.Interrupt, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
+	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
 
 	go func(c <-chan os.Signal) {
 		<-c
