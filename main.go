@@ -402,6 +402,8 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 					downloadStopped = true
 					go abortWork()
 					break loop
+				default: // No more work
+					break loop
 				}
 			}
 		}()
@@ -524,7 +526,7 @@ func startInterruptWatcher() {
 
 	go func(c chan os.Signal) {
 		<-c
-		fmt.Println("Received abortion signal")
+		fmt.Println("\nReceived abortion signal")
 		abortWork()
 	}(signalChan)
 }
