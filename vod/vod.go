@@ -34,18 +34,18 @@ type Vod struct {
 	Title  string
 }
 
-// VodQuality a struct that contains quality values of a VOD
-type VodQuality struct {
+// Quality a struct that contains quality values of a VOD
+type Quality struct {
 	Resolution string
 	Quality    string
 }
 
+// GetM3U8ListForQuality ...
 func (vod Vod) GetM3U8ListForQuality(quality string) (string, error) {
 	resp, err := httpClient.Get(vod.apiMap[quality])
 	if err != nil {
 		return "", err
 	}
-
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		return "", err
@@ -92,7 +92,9 @@ func (vod Vod) fetchData() (map[string]interface{}, error) {
 
 	return jsonResult.(map[string]interface{}), nil
 }
-func (vod Vod) GetQualityOptions() ([]VodQuality, error) {
+
+// GetQualityOptions Returns all the possible quality options for this VOD
+func (vod Vod) GetQualityOptions() ([]Quality, error) {
 	fmt.Println("Contacting Twitch Server")
 
 	sig, token, err := vod.AccessTokenAPI()
@@ -107,23 +109,20 @@ func (vod Vod) GetQualityOptions() ([]VodQuality, error) {
 	}
 
 	qualityCount := strings.Count(respString, resolutionStart)
-	vodQualities := make([]VodQuality, 0)
+	vodQualities := make([]Quality, 0)
 	for i := 0; i < qualityCount; i++ {
 		rs := strings.Index(respString, resolutionStart) + len(resolutionStart)
 		re := strings.Index(respString[rs:len(respString)], resolutionEnd) + rs
 		qs := strings.Index(respString, qualityStart) + len(qualityStart)
 		qe := strings.Index(respString[qs:len(respString)], qualityEnd) + qs
 
-		vodQualities = append(vodQualities, VodQuality{Resolution: respString[rs:re], Quality: respString[qs:qe]})
+		vodQualities = append(vodQualities, Quality{Resolution: respString[rs:re], Quality: respString[qs:qe]})
 		respString = respString[qe:len(respString)]
 	}
 	return vodQualities, nil
 }
 
-/*
-	Returns the signature and token from a tokenAPILink
-	signature and token are needed for accessing the usher api
-*/
+// AccessTokenAPI Returns the signature and token from a tokenAPILink signature and token are needed for accessing the usher api
 func (vod Vod) AccessTokenAPI() (string, string, error) {
 	resp, err := httpClient.Get(fmt.Sprintf(tokenAPILink, vod.ID, TwitchClientID))
 	if err != nil {
@@ -148,6 +147,7 @@ func SetDebug(v bool) {
 	debug = v
 }
 
+// GetEdgecastURLMap ...
 func (vod Vod) GetEdgecastURLMap() map[string]string {
 	return vod.apiMap
 }
@@ -189,7 +189,7 @@ func (vod Vod) accessUsherAPIRaw(signature, token string) (string, error) {
 	return string(body), nil
 }
 
-// SetHttpClient sets the used http.Client for api requests
-func SetHttpClient(client *http.Client) {
+// SetHTTPClient sets the used http.Client for api requests
+func SetHTTPClient(client *http.Client) {
 	httpClient = client
 }

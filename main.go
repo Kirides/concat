@@ -58,6 +58,8 @@ var httpClient = &http.Client{Timeout: time.Minute}
 var totalChunks int
 var chunksCompleted = 0
 
+var vodTimeFormat = "HH MM SS"
+
 /*
 	Returns the number of chunks to download based of the start and end time and the target duration of a
 	chunk. Adding 1 to overshoot the end by a bit
@@ -191,16 +193,18 @@ func wrongInputNotification() {
 
 func downloadPartVOD(vodIDString string, start string, end string, quality string) {
 	var vodSH, vodSM, vodSS, vodEH, vodEM, vodES int
-	if end != "full" {
+	if start != vodTimeFormat {
 		startArray := strings.Split(start, " ")
-		endArray := strings.Split(end, " ")
-
 		vodSH, _ = strconv.Atoi(startArray[0]) //start Hour
 		vodSM, _ = strconv.Atoi(startArray[1]) //start minute
 		vodSS, _ = strconv.Atoi(startArray[2]) //start second
-		vodEH, _ = strconv.Atoi(endArray[0])   //end hour
-		vodEM, _ = strconv.Atoi(endArray[1])   //end minute
-		vodES, _ = strconv.Atoi(endArray[2])   //end second
+	}
+
+	if end != "full" {
+		endArray := strings.Split(end, " ")
+		vodEH, _ = strconv.Atoi(endArray[0]) //end hour
+		vodEM, _ = strconv.Atoi(endArray[1]) //end minute
+		vodES, _ = strconv.Atoi(endArray[2]) //end second
 
 		if (vodSH*3600 + vodSM*60 + vodSS) > (vodEH*3600 + vodEM*60 + vodES) {
 			fmt.Println("Start time is greater than end time!")
@@ -357,13 +361,20 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 
 	if end != "full" {
 		targetduration, _ := strconv.Atoi(m3u8List[strings.Index(m3u8List, targetdurationStart)+len(targetdurationStart) : strings.Index(m3u8List, targetdurationEnd)])
+		fmt.Printf("TargetDuration: %d\n", targetduration)
 		chunkNum = numberOfChunks(vodSH, vodSM, vodSS, vodEH, vodEM, vodES, targetduration)
 		startChunk = startingChunk(vodSH, vodSM, vodSS, targetduration)
 	} else {
-		fmt.Println("Dowbloading full vod")
-
-		chunkNum = len(m3u8Array)
-		startChunk = 0
+		if start != vodTimeFormat {
+			fmt.Printf("Downloading from %02d:%02d:%02d until end\n", vodSH, vodSM, vodSS)
+			targetduration, _ := strconv.Atoi(m3u8List[strings.Index(m3u8List, targetdurationStart)+len(targetdurationStart) : strings.Index(m3u8List, targetdurationEnd)])
+			startChunk = startingChunk(vodSH, vodSM, vodSS, targetduration)
+			chunkNum = len(m3u8Array[startChunk:])
+		} else {
+			fmt.Println("Downloading full vod")
+			chunkNum = len(m3u8Array)
+			startChunk = 0
+		}
 	}
 
 	if debug {
@@ -442,6 +453,9 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 	ffmpegCombine(newpath, chunkNum, startChunk, vodStruct)
 	cleanUpAndExit()
 }
+func defaultEnd(v string) bool {
+	return (v == vodTimeFormat)
+}
 
 func rightVersion() bool {
 	resp, err := httpClient.Get(currentReleaseLink)
@@ -458,7 +472,7 @@ func rightVersion() bool {
 	return respString[cs:ce] == versionNumber
 }
 
-func printQualityOptions(qualityOptions []vod.VodQuality) {
+func printQualityOptions(qualityOptions []vod.Quality) {
 	for _, v := range qualityOptions {
 		// fmt.Printf("resolution: %s, download with -quality=\"%s\"\n", v.Resolution, v.Quality)
 		fmt.Printf(`%-8s => -quality="%s"`+"\n", v.Resolution, v.Quality)
@@ -475,16 +489,15 @@ func main() {
 
 	qualityInfo := flag.Bool("qualityinfo", false, "if you want to see the avaliable quality options")
 
-	standardStartAndEnd := "HH MM SS"
 	standardVOD := "123456789"
-	vodID := flag.String("vod", standardVOD, "the vod id https://www.twitch.tv/videos/123456789")
-	start := flag.String("start", standardStartAndEnd, "For example: 0 0 0 for starting at the bedinning of the vod")
-	end := flag.String("end", standardStartAndEnd, "For example: 1 20 0 for ending the vod at 1 hour and 20 minutes")
-	quality := flag.String("quality", sourceQuality, "chunked for source quality is automatically used if -quality isn't set")
+	vodID := *flag.String("vod", standardVOD, "the vod id https://www.twitch.tv/videos/123456789")
+	start := *flag.String("start", vodTimeFormat, "For example: 0 0 0 for starting at the bedinning of the vod")
+	end := *flag.String("end", "full", "For example: 1 20 0 for ending the vod at 1 hour and 20 minutes")
+	quality := *flag.String("quality", sourceQuality, "chunked for source quality is automatically used if -quality isn't set")
 	flag.BoolVar(&debug, "debug", false, "debug output")
 	flag.IntVar(&maximumConcurrency, "concurrency", 5, "Total amount of allowed concurrency for download")
 	flag.BoolVar(&useVideoTitle, "videotitle", true, "When set, video will be named like 'This is my VOD_12345678.mp4'")
-	flag.BoolVar(&noProgress, "no-progress", false, "When set, video will be named like 'This is my VOD_12345678.mp4'")
+	flag.BoolVar(&noProgress, "no-progress", false, "Do not display progressbar while download")
 	flag.Parse()
 
 	httpClient.Transport = &http.Transport{
@@ -492,19 +505,19 @@ func main() {
 		// MaxIdleConns:        maximumConcurrency,
 	}
 	vod.SetDebug(debug)
-	vod.SetHttpClient(httpClient)
+	vod.SetHTTPClient(httpClient)
 
 	if !rightVersion() {
-		fmt.Printf("\nYou are using an old version of concat. Check out %s for the most recent version.\n\n", currentReleaseLink)
+		fmt.Printf("\nYou are not using the latest version of concat. Check out %s for the most recent version.\n\n", currentReleaseLink)
 	}
 
-	if *vodID == standardVOD {
+	if vodID == standardVOD {
 		wrongInputNotification()
 		os.Exit(1)
 	}
 
 	if *qualityInfo {
-		vod, err := vod.GetVod(*vodID)
+		vod, err := vod.GetVod(vodID)
 		if err != nil {
 			os.Exit(1)
 		}
@@ -521,10 +534,10 @@ func main() {
 		abortWork()
 	})
 
-	if *start != standardStartAndEnd && *end != standardStartAndEnd {
-		downloadPartVOD(*vodID, *start, *end, *quality)
+	if start != vodTimeFormat && end != vodTimeFormat {
+		downloadPartVOD(vodID, start, end, quality)
 	} else {
-		downloadPartVOD(*vodID, "0", "full", *quality)
+		downloadPartVOD(vodID, "0", "full", quality)
 	}
 	// Wait until cleanUpAndExit is called
 	<-done
