@@ -39,6 +39,7 @@ const currentReleaseLink string = "https://github.com/ArneVogel/concat/releases/
 const currentReleaseStart string = `<a href="/ArneVogel/concat/releases/download/`
 const currentReleaseEnd string = `/concat"`
 const versionNumber string = "v0.2.2"
+const maxRetryCount int = 3
 
 var ffmpegCMD = `ffmpeg`
 
@@ -80,23 +81,32 @@ func downloadChunk(newpath string, edgecastBaseURL string, chunkNum string, chun
 	if debug {
 		fmt.Printf("Downloading: %s\n", edgecastBaseURL+chunkName)
 	}
-	req, err := http.NewRequest("GET", edgecastBaseURL+chunkName, nil)
-	if err != nil {
-		return fmt.Errorf("Could not reach %s: '%v'", edgecastBaseURL+chunkName, err)
-	}
-	req = req.WithContext(ctxt)
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("Could not get '%v'", err)
-	}
 
 	resultFile, err := os.Create(filepath.Join(newpath, vodID+"_"+chunkNum+chunkFileExtension))
 	if err != nil {
 		return fmt.Errorf("Could not create file '%s'", newpath+"/"+vodID+"_"+chunkNum+chunkFileExtension)
 	}
-	defer resultFile.Close()
-	if _, err := io.Copy(resultFile, resp.Body); err != nil {
-		return fmt.Errorf("Could not download file '%s'. %v", vodID+"_"+chunkNum+chunkFileExtension, err)
+	retry := 0
+	for {
+		req, err := http.NewRequest("GET", edgecastBaseURL+chunkName, nil)
+		if err != nil {
+			return fmt.Errorf("Could not reach %s: '%v'", edgecastBaseURL+chunkName, err)
+		}
+		req = req.WithContext(ctxt)
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			return fmt.Errorf("Could not get '%v'", err)
+		}
+		defer resultFile.Close()
+		if _, err := io.Copy(resultFile, resp.Body); err != nil {
+			retry++
+			fmt.Printf("Error downloading (retry: %d) file: %s\n", retry, edgecastBaseURL+chunkName)
+			if retry > maxRetryCount {
+				return fmt.Errorf("Could not download file '%s'. %v", vodID+"_"+chunkNum+chunkFileExtension, err)
+			}
+			continue
+		}
+		break
 	}
 	chunksCompleted++
 	if !debug && !noProgress {
