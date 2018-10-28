@@ -101,7 +101,7 @@ func downloadChunk(newpath string, edgecastBaseURL string, chunkNum string, chun
 		if _, err := io.Copy(resultFile, resp.Body); err != nil {
 			retry++
 			fmt.Printf("Error downloading (retry: %d) file: %s\n", retry, edgecastBaseURL+chunkName)
-			if retry > maxRetryCount {
+			if retry > maxRetryCount || err == context.Canceled {
 				return fmt.Errorf("Could not download file '%s'. %v", vodID+"_"+chunkNum+chunkFileExtension, err)
 			}
 			continue
@@ -500,10 +500,10 @@ func main() {
 	qualityInfo := flag.Bool("qualityinfo", false, "if you want to see the avaliable quality options")
 
 	standardVOD := "123456789"
-	vodID := *flag.String("vod", standardVOD, "the vod id https://www.twitch.tv/videos/123456789")
-	start := *flag.String("start", vodTimeFormat, "For example: 0 0 0 for starting at the bedinning of the vod")
-	end := *flag.String("end", "full", "For example: 1 20 0 for ending the vod at 1 hour and 20 minutes")
-	quality := *flag.String("quality", sourceQuality, "chunked for source quality is automatically used if -quality isn't set")
+	vodID := flag.String("vod", standardVOD, "the vod id https://www.twitch.tv/videos/123456789")
+	start := flag.String("start", "0 0 0", "\"HH mm ss\" For example: 0 0 0 for starting at the bedinning of the vod")
+	end := flag.String("end", "full", "For example: 1 20 0 for ending the vod at 1 hour and 20 minutes")
+	quality := flag.String("quality", sourceQuality, "chunked for source quality is automatically used if -quality isn't set")
 	flag.BoolVar(&debug, "debug", false, "debug output")
 	flag.IntVar(&maximumConcurrency, "concurrency", 5, "Total amount of allowed concurrency for download")
 	flag.BoolVar(&useVideoTitle, "videotitle", true, "When set, video will be named like 'This is my VOD_12345678.mp4'")
@@ -517,17 +517,17 @@ func main() {
 	vod.SetDebug(debug)
 	vod.SetHTTPClient(httpClient)
 
-	if !rightVersion() {
-		fmt.Printf("\nYou are not using the latest version of concat. Check out %s for the most recent version.\n\n", currentReleaseLink)
-	}
+	// if !rightVersion() {
+	// 	fmt.Printf("\nYou are not using the latest version of concat. Check out %s for the most recent version.\n\n", currentReleaseLink)
+	// }
 
-	if vodID == standardVOD {
+	if *vodID == standardVOD {
 		wrongInputNotification()
 		os.Exit(1)
 	}
 
 	if *qualityInfo {
-		vod, err := vod.GetVod(vodID)
+		vod, err := vod.GetVod(*vodID)
 		if err != nil {
 			os.Exit(1)
 		}
@@ -544,10 +544,10 @@ func main() {
 		abortWork()
 	})
 
-	if start != vodTimeFormat && end != vodTimeFormat {
-		downloadPartVOD(vodID, start, end, quality)
+	if *start != vodTimeFormat && *end != vodTimeFormat {
+		downloadPartVOD(*vodID, *start, *end, *quality)
 	} else {
-		downloadPartVOD(vodID, "0", "full", quality)
+		downloadPartVOD(*vodID, "0", "full", *quality)
 	}
 	// Wait until cleanUpAndExit is called
 	<-done
