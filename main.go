@@ -12,13 +12,14 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/ArneVogel/concat/m3u8parser"
 
 	"github.com/ArneVogel/concat/vod"
 	"golang.org/x/crypto/ssh/terminal"
@@ -359,7 +360,7 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 
 	m3u8List, err := vodStruct.GetM3U8ListForQuality(quality)
 	if err != nil {
-		fmt.Println("Couldn't download m3u8 list")
+		fmt.Fprintln(os.Stderr, "Couldn't download m3u8 list")
 		abortWork()
 		return
 	}
@@ -368,14 +369,17 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 		fmt.Printf("\nm3u8List:\n%s\n", m3u8List)
 	}
 
-	m3u8Array := readFileUris(m3u8List)
-
+	m3u8Array, fileDurations, err := m3u8parser.Parse(m3u8List)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Could not parse durations")
+		abortWork()
+		return
+	}
 	if debug {
 		fmt.Printf("\nItems list: %v\n", m3u8Array)
 	}
 
 	var chunkNum, startChunk int
-	fileDurations, err := readFileDurations(m3u8List)
 
 	if end != "full" {
 		// targetduration, _ := strconv.Atoi(m3u8List[strings.Index(m3u8List, targetdurationStart)+len(targetdurationStart) : strings.Index(m3u8List, targetdurationEnd)])
@@ -496,36 +500,6 @@ func dbgPrintf(format string, a ...interface{}) (int, error) {
 		return fmt.Printf(format, a...)
 	}
 	return 0, nil
-}
-
-func readFileUris(m3u8List string) []string {
-	var fileRegex = regexp.MustCompile("(?m:^[^#\\n]+)")
-	matches := fileRegex.FindAllStringSubmatch(m3u8List, -1)
-	var ret []string
-	for _, match := range matches {
-		ret = append(ret, match[0])
-	}
-	return ret
-}
-
-func readFileDurations(m3u8List string) ([]float64, error) {
-	var fileRegex = regexp.MustCompile("(?m:^#EXTINF:(\\d+(\\.\\d+)?))")
-	matches := fileRegex.FindAllStringSubmatch(m3u8List, -1)
-
-	var ret []float64
-
-	for _, match := range matches {
-
-		fileLength, err := strconv.ParseFloat(match[1], 64)
-
-		if err != nil {
-			return nil, fmt.Errorf("Could not parse %s to a float. %v", match[1], err)
-		}
-
-		ret = append(ret, fileLength)
-	}
-
-	return ret, nil
 }
 
 func calcStartChunkAndChunkCount(chunkDurations []float64, startSeconds int, clipDuration int) (int, int, float64) {
