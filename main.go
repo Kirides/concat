@@ -84,6 +84,7 @@ func downloadChunk(newpath string, edgecastBaseURL string, chunkNum string, chun
 
 	downloadPath := filepath.Join(newpath, vodID+"_"+chunkNum+chunkFileExtension)
 	if _, err := os.Stat(downloadPath); !os.IsNotExist(err) {
+		chunksCompleted++
 		if debug {
 			fmt.Printf("Skipping %s. Reason: already downloaded.\n", edgecastBaseURL+chunkName)
 		}
