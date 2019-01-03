@@ -354,32 +354,45 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 		fmt.Printf("\nm3u8List:\n%s\n", m3u8List)
 	}
 
-	var re = regexp.MustCompile("\n([^#]+)\n")
-	match := re.FindAllStringSubmatch(m3u8List, -1)
-
-	var m3u8Array []string
-
-	for _, element := range match {
-		m3u8Array = append(m3u8Array, element[1])
-	}
+	m3u8Array := readFileUris(m3u8List)
 
 	if debug {
 		fmt.Printf("\nItems list: %v\n", m3u8Array)
 	}
 
 	var chunkNum, startChunk int
+	fileDurations, err := readFileDurations(m3u8List)
 
 	if end != "full" {
-		targetduration, _ := strconv.Atoi(m3u8List[strings.Index(m3u8List, targetdurationStart)+len(targetdurationStart) : strings.Index(m3u8List, targetdurationEnd)])
-		fmt.Printf("TargetDuration: %d\n", targetduration)
-		chunkNum = numberOfChunks(vodSH, vodSM, vodSS, vodEH, vodEM, vodES, targetduration)
-		startChunk = startingChunk(vodSH, vodSM, vodSS, targetduration)
+		// targetduration, _ := strconv.Atoi(m3u8List[strings.Index(m3u8List, targetdurationStart)+len(targetdurationStart) : strings.Index(m3u8List, targetdurationEnd)])
+		// fmt.Printf("TargetDuration: %d\n", targetduration)
+		// chunkNum = numberOfChunks(vodSH, vodSM, vodSS, vodEH, vodEM, vodES, targetduration)
+		// startChunk = startingChunk(vodSH, vodSM, vodSS, targetduration)
+
+		if err != nil || len(fileDurations) != len(m3u8Array) {
+			dbgPrintf("Could not determine real file durations. Using targetDuration as fallback.")
+			targetduration, _ := strconv.Atoi(m3u8List[strings.Index(m3u8List, targetdurationStart)+len(targetdurationStart) : strings.Index(m3u8List, targetdurationEnd)])
+			chunkNum = calcChunkCount(vodSH, vodSM, vodSS, vodEH, vodEM, vodES, targetduration)
+			startChunk = startingChunk(vodSH, vodSM, vodSS, targetduration)
+		} else {
+			startSeconds := toSeconds(vodSH, vodSM, vodSS)
+			clipDuration := toSeconds(vodEH, vodEM, vodES) - startSeconds
+			startChunk, chunkNum, _ = calcStartChunkAndChunkCount(fileDurations, startSeconds, clipDuration)
+		}
 	} else {
 		if start != vodTimeFormat {
 			fmt.Printf("Downloading from %02d:%02d:%02d until end\n", vodSH, vodSM, vodSS)
-			targetduration, _ := strconv.Atoi(m3u8List[strings.Index(m3u8List, targetdurationStart)+len(targetdurationStart) : strings.Index(m3u8List, targetdurationEnd)])
-			startChunk = startingChunk(vodSH, vodSM, vodSS, targetduration)
-			chunkNum = len(m3u8Array[startChunk:])
+			if err != nil || len(fileDurations) != len(m3u8Array) {
+				dbgPrintf("Could not determine real file durations. Using targetDuration as fallback.")
+				targetduration, _ := strconv.Atoi(m3u8List[strings.Index(m3u8List, targetdurationStart)+len(targetdurationStart) : strings.Index(m3u8List, targetdurationEnd)])
+				startChunk = startingChunk(vodSH, vodSM, vodSS, targetduration)
+				chunkNum = len(m3u8Array[startChunk:])
+			} else {
+				startSeconds := toSeconds(vodSH, vodSM, vodSS)
+				startChunk, _, _ = calcStartChunkAndChunkCount(fileDurations, startSeconds, 0)
+				chunkNum = len(m3u8Array[startChunk:])
+			}
+
 		} else {
 			fmt.Println("Downloading full vod")
 			chunkNum = len(m3u8Array)
@@ -463,6 +476,89 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 	ffmpegCombine(newpath, chunkNum, startChunk, vodStruct)
 	cleanUpAndExit()
 }
+
+func dbgPrintf(format string, a ...interface{}) (int, error) {
+	if debug {
+		return fmt.Printf(format, a...)
+	}
+	return 0, nil
+}
+
+func readFileUris(m3u8List string) []string {
+	var fileRegex = regexp.MustCompile("(?m:^[^#\\n]+)")
+	matches := fileRegex.FindAllStringSubmatch(m3u8List, -1)
+	var ret []string
+	for _, match := range matches {
+		ret = append(ret, match[0])
+	}
+	return ret
+}
+
+func readFileDurations(m3u8List string) ([]float64, error) {
+	var fileRegex = regexp.MustCompile("(?m:^#EXTINF:(\\d+(\\.\\d+)?))")
+	matches := fileRegex.FindAllStringSubmatch(m3u8List, -1)
+
+	var ret []float64
+
+	for _, match := range matches {
+
+		fileLength, err := strconv.ParseFloat(match[1], 64)
+
+		if err != nil {
+			return nil, fmt.Errorf("Could not parse %s to a float. %v", match[1], err)
+		}
+
+		ret = append(ret, fileLength)
+	}
+
+	return ret, nil
+}
+
+func calcStartChunkAndChunkCount(chunkDurations []float64, startSeconds int, clipDuration int) (int, int, float64) {
+	startChunk := 0
+	chunkCount := 0
+	startSecondsRemainder := float64(0)
+
+	cumulatedDuration := 0.0
+	for chunk, chunkDuration := range chunkDurations {
+		cumulatedDuration += chunkDuration
+
+		if cumulatedDuration > float64(startSeconds) {
+			startChunk = chunk
+			startSecondsRemainder = float64(startSeconds) - (cumulatedDuration - chunkDuration)
+			break
+		}
+	}
+
+	cumulatedDuration = 0.0
+	minChunkedClipDuration := float64(clipDuration) + startSecondsRemainder
+	for chunk := startChunk; chunk < len(chunkDurations); chunk++ {
+		cumulatedDuration += chunkDurations[chunk]
+
+		if cumulatedDuration > minChunkedClipDuration {
+			chunkCount = chunk - startChunk + 1
+			break
+		}
+	}
+
+	if chunkCount == 0 {
+		chunkCount = len(chunkDurations) - startChunk
+	}
+
+	return startChunk, chunkCount, startSecondsRemainder
+}
+
+func calcChunkCount(sh int, sm int, ss int, eh int, em int, es int, target int) int {
+	start_seconds := toSeconds(sh, sm, ss)
+	end_seconds := toSeconds(eh, em, es)
+
+	return ((end_seconds - start_seconds) / target) + 1
+}
+
+func toSeconds(sh int, sm int, ss int) int {
+	return sh*3600 + sm*60 + ss
+}
+
 func defaultEnd(v string) bool {
 	return (v == vodTimeFormat)
 }
