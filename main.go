@@ -82,7 +82,15 @@ func downloadChunk(newpath string, edgecastBaseURL string, chunkNum string, chun
 		fmt.Printf("Downloading: %s\n", edgecastBaseURL+chunkName)
 	}
 
-	resultFile, err := os.Create(filepath.Join(newpath, vodID+"_"+chunkNum+chunkFileExtension))
+	downloadPath := filepath.Join(newpath, vodID+"_"+chunkNum+chunkFileExtension)
+	if _, err := os.Stat(downloadPath); !os.IsNotExist(err) {
+		if debug {
+			fmt.Printf("Skipping %s. Reason: already downloaded.\n", edgecastBaseURL+chunkName)
+		}
+		return nil
+	}
+
+	resultFile, err := os.Create(downloadPath)
 	if err != nil {
 		return fmt.Errorf("Could not create file '%s'", newpath+"/"+vodID+"_"+chunkNum+chunkFileExtension)
 	}
@@ -102,6 +110,11 @@ func downloadChunk(newpath string, edgecastBaseURL string, chunkNum string, chun
 			retry++
 			fmt.Printf("Error downloading (retry: %d) file: %s\n", retry, edgecastBaseURL+chunkName)
 			if retry > maxRetryCount || err == context.Canceled {
+				if err := resultFile.Close(); err == nil {
+					if err := os.Remove(downloadPath); err != nil {
+						return fmt.Errorf("Could not delete partially downloaded file '%s'. %v", vodID+"_"+chunkNum+chunkFileExtension, err)
+					}
+				}
 				return fmt.Errorf("Could not download file '%s'. %v", vodID+"_"+chunkNum+chunkFileExtension, err)
 			}
 			continue
