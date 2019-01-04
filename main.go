@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -61,6 +62,11 @@ var totalChunks int
 var chunksCompleted = 0
 
 var vodTimeFormat = "HH MM SS"
+
+func resetVars() {
+	totalChunks = 0
+	chunksCompleted = 0
+}
 
 /*
 	Returns the number of chunks to download based of the start and end time and the target duration of a
@@ -489,10 +495,8 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 		return
 	}
 
-	defer fmt.Println("All done!")
 	fmt.Println("\nCombining parts")
 	ffmpegCombine(newpath, chunkNum, startChunk, vodStruct)
-	cleanUpAndExit()
 }
 
 func dbgPrintf(format string, a ...interface{}) (int, error) {
@@ -580,14 +584,16 @@ func init() {
 }
 
 func main() {
+	var qualityInfo bool
+	var start, end, quality string
+	standardVOD := ""
 
-	qualityInfo := flag.Bool("qualityinfo", false, "if you want to see the avaliable quality options")
+	flag.Usage = printUsage
 
-	standardVOD := "123456789"
-	vodID := flag.String("vod", standardVOD, "the vod id https://www.twitch.tv/videos/123456789")
-	start := flag.String("start", "0 0 0", "\"HH mm ss\" For example: 0 0 0 for starting at the bedinning of the vod")
-	end := flag.String("end", "full", "For example: 1 20 0 for ending the vod at 1 hour and 20 minutes")
-	quality := flag.String("quality", sourceQuality, "chunked for source quality is automatically used if -quality isn't set")
+	flag.BoolVar(&qualityInfo, "qualityinfo", false, "if you want to see the avaliable quality options")
+	flag.StringVar(&start, "start", "0 0 0", "\"HH mm ss\" For example: 0 0 0 for starting at the bedinning of the vod")
+	flag.StringVar(&end, "end", "full", "For example: 1 20 0 for ending the vod at 1 hour and 20 minutes")
+	flag.StringVar(&quality, "quality", sourceQuality, "chunked for source quality is automatically used if -quality isn't set")
 	flag.BoolVar(&debug, "debug", false, "debug output")
 	flag.IntVar(&maximumConcurrency, "concurrency", 5, "Total amount of allowed concurrency for download")
 	flag.BoolVar(&useVideoTitle, "videotitle", true, "When set, video will be named like 'This is my VOD_12345678.mp4'")
@@ -605,47 +611,80 @@ func main() {
 	// 	fmt.Printf("\nYou are not using the latest version of concat. Check out %s for the most recent version.\n\n", currentReleaseLink)
 	// }
 
-	if *vodID == standardVOD {
-		wrongInputNotification()
-		os.Exit(1)
-	}
-
-	if *qualityInfo {
-		vod, err := vod.GetVod(*vodID)
-		if err != nil {
-			os.Exit(1)
-		}
-		qualityOptions, err := vod.GetQualityOptions()
-		if err != nil {
-			os.Exit(1)
-		}
-		printQualityOptions(qualityOptions)
-		os.Exit(0)
-	}
-
 	handleInterrupt(func() {
 		fmt.Println("\nReceived abortion signal")
 		abortWork()
 	})
 
-	if *start != vodTimeFormat && *end != vodTimeFormat {
-		downloadPartVOD(*vodID, *start, *end, *quality)
-	} else {
-		downloadPartVOD(*vodID, "0", "full", *quality)
+	for _, vodID := range flag.Args() {
+		resetVars()
+		if vodID == standardVOD {
+			wrongInputNotification()
+			os.Exit(1)
+		}
+		vodID, _ = normalizeVodID(vodID)
+		if qualityInfo {
+			vod, err := vod.GetVod(vodID)
+			if err != nil {
+				os.Exit(1)
+			}
+			qualityOptions, err := vod.GetQualityOptions()
+			if err != nil {
+				os.Exit(1)
+			}
+			printQualityOptions(qualityOptions)
+			os.Exit(0)
+		}
+
+		if start != vodTimeFormat && end != vodTimeFormat {
+			downloadPartVOD(vodID, start, end, quality)
+		} else {
+			downloadPartVOD(vodID, "0", "full", quality)
+		}
+
+		cleanUp()
 	}
+	cleanUpAndExit()
+
 	// Wait until cleanUpAndExit is called
 	<-done
 }
 
+func printUsage() {
+	fmt.Printf("Usage: %s [OPTIONS] urlOrID ... nUrlOrID\n", os.Args[0])
+	flag.PrintDefaults()
+}
+
+func normalizeVodID(vodID string) (string, error) {
+	rxURL := regexp.MustCompile(`twitch.tv\/videos\/([\w\-_]+)`)
+	rxID := regexp.MustCompile(`[\w\-_]+`)
+
+	if strings.HasPrefix(vodID, "http") && rxURL.MatchString(vodID) {
+		if match := rxURL.FindStringSubmatch(vodID); match != nil {
+			return match[1], nil
+		}
+	}
+	if rxID.MatchString(vodID) {
+		return vodID, nil
+	}
+
+	return vodID, fmt.Errorf("Invalid Video ID/URL '%s'", vodID)
+}
+
 func cleanUpAndExit() {
 	fmt.Println("Application closing")
-	if len(cleanUpQueue) > 0 {
+	cleanUp()
+	close(done)
+}
+
+func cleanUp() {
+	if cleanUpQueue != nil && len(cleanUpQueue) > 0 {
 		fmt.Println("Starting cleanup")
 		for _, fn := range cleanUpQueue {
 			fn()
 		}
+		cleanUpQueue = nil
 	}
-	close(done)
 }
 
 func abortWork() {
