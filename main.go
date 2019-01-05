@@ -98,7 +98,7 @@ func downloadChunk(newpath string, edgecastBaseURL string, chunkNum string, chun
 		return nil
 	}
 	tempPartPath := downloadPath + ".part"
-	resultFile, err := os.Create(tempPartPath)
+	resultFile, err := os.OpenFile(tempPartPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
 		return fmt.Errorf("Could not create file '%s'", newpath+"/"+filename)
 	}
@@ -108,6 +108,12 @@ func downloadChunk(newpath string, edgecastBaseURL string, chunkNum string, chun
 		if err != nil {
 			return fmt.Errorf("Could not reach %s: '%v'", edgecastBaseURL+chunkName, err)
 		}
+
+		if info, err := resultFile.Stat(); err == nil && info.Size() != 0 {
+			rangeHeader := "bytes=" + strconv.FormatInt(info.Size(), 10) + "-"
+			req.Header.Add("range", rangeHeader)
+		}
+
 		req = req.WithContext(ctxt)
 		resp, err := httpClient.Do(req)
 		if err != nil {
@@ -365,8 +371,13 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 		fmt.Println(err)
 		return
 	}
-
-	fmt.Println("Getting Video info")
+	var vodTitle string
+	if useVideoTitle {
+		vodTitle = vodStruct.Title
+	} else {
+		vodTitle = vodStruct.ID
+	}
+	fmt.Printf("Getting Video info for '%s'\n", vodTitle)
 
 	m3u8List, err := vodStruct.GetM3U8ListForQuality(quality)
 	if err != nil {
