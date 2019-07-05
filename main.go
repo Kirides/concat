@@ -570,10 +570,10 @@ func calcStartChunkAndChunkCount(chunkDurations []float64, startSeconds int, cli
 }
 
 func calcChunkCount(sh int, sm int, ss int, eh int, em int, es int, target int) int {
-	start_seconds := toSeconds(sh, sm, ss)
-	end_seconds := toSeconds(eh, em, es)
+	startSeconds := toSeconds(sh, sm, ss)
+	endSeconds := toSeconds(eh, em, es)
 
-	return ((end_seconds - start_seconds) / target) + 1
+	return ((endSeconds - startSeconds) / target) + 1
 }
 
 func toSeconds(sh int, sm int, ss int) int {
