@@ -102,10 +102,14 @@ func downloadChunk(newpath string, edgecastBaseURL string, chunkNum string, chun
 	if err != nil {
 		return fmt.Errorf("Could not create file '%s'", newpath+"/"+filename)
 	}
+	defer resultFile.Close()
 	retry := 0
 	for {
 		req, err := http.NewRequest("GET", edgecastBaseURL+chunkName, nil)
 		if err != nil {
+			if strings.Contains(err.Error(), "canceled") {
+				return nil
+			}
 			return fmt.Errorf("Could not reach %s: '%v'", edgecastBaseURL+chunkName, err)
 		}
 
@@ -117,23 +121,33 @@ func downloadChunk(newpath string, edgecastBaseURL string, chunkNum string, chun
 		req = req.WithContext(ctxt)
 		resp, err := httpClient.Do(req)
 		if err != nil {
+			if strings.Contains(err.Error(), "canceled") {
+				return nil
+			}
 			return fmt.Errorf("Could not get '%v'", err)
 		}
-		defer resultFile.Close() // Ensure file will be closed
+		closer := func() {
+			resp.Body.Close()
+			resultFile.Close()
+		}
+		defer closer() // Ensure file will be closed
 		if _, err := io.Copy(resultFile, resp.Body); err != nil {
 			retry++
-			fmt.Printf("Error downloading (retry: %d) file: %s\n", retry, edgecastBaseURL+chunkName)
-			if retry > maxRetryCount || err == context.Canceled {
-				if err := resultFile.Close(); err == nil {
-					if err := os.Remove(downloadPath); err != nil {
-						return fmt.Errorf("Could not delete partially downloaded file '%s'. %v", filename, err)
-					}
+			isCancelled := strings.Contains(err.Error(), "canceled")
+			if retry > maxRetryCount || isCancelled {
+				closer()
+				if err := os.Remove(tempPartPath); err != nil {
+					return fmt.Errorf("Could not delete partially downloaded file '%s'. %v", filename, err)
+				}
+				if isCancelled {
+					return nil
 				}
 				return fmt.Errorf("Could not download file '%s'. %v", filename, err)
 			}
+			fmt.Printf("Error downloading (retry: %d) file: %s\n", retry, edgecastBaseURL+chunkName)
 			continue
 		}
-		resultFile.Close() // close file prior to moving
+		closer() // close file prior to moving
 		if err := os.Rename(tempPartPath, downloadPath); err != nil {
 			return fmt.Errorf("Could not rename file '%s'. %v", tempPartPath, err)
 		}
@@ -659,9 +673,9 @@ func main() {
 
 		cleanUp()
 	}
-	cleanUpAndExit()
+	abortWork()
 
-	// Wait until cleanUpAndExit is called
+	// Wait until abortWork is called
 	<-done
 }
 
