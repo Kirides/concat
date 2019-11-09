@@ -385,11 +385,9 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 		fmt.Println(err)
 		return
 	}
-	var vodTitle string
+	vodTitle := vodStruct.ID
 	if useVideoTitle {
 		vodTitle = vodStruct.Title
-	} else {
-		vodTitle = vodStruct.ID
 	}
 	fmt.Printf("Getting Video info for '%s'\n", vodTitle)
 
@@ -628,6 +626,9 @@ func main() {
 	flag.BoolVar(&useVideoTitle, "videotitle", true, "When set, video will be named like 'This is my VOD_12345678.mp4'")
 	flag.BoolVar(&noProgress, "no-progress", false, "Do not display progressbar while download")
 	flag.Parse()
+
+	vod.TwitchClientID = os.Getenv("TWITCH_CLIENT_ID")
+	vod.TwitchClientSecret = os.Getenv("TWITCH_CLIENT_SECRET")
 
 	httpClient.Transport = &http.Transport{
 		MaxIdleConnsPerHost: maximumConcurrency,

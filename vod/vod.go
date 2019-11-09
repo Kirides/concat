@@ -23,7 +23,10 @@ const tokenAPILink = "https://api.twitch.tv/api/vods/%v/access_token?&client_id=
 const usherAPILink = "https://usher.ttvnw.net/vod/%v?nauthsig=%v&nauth=%v&allow_source=true"
 
 // TwitchClientID defines the ID used for interacting with the Twitch-API
-var TwitchClientID = "aokchnui2n8q38g0vezl9hq6htzy4c"
+var TwitchClientID = ""
+
+// TwitchClientSecret defines the Client Secret used for interacting with the Twitch-API
+var TwitchClientSecret = ""
 var debug = false
 var httpClient = http.DefaultClient
 
@@ -77,7 +80,7 @@ func (vod Vod) fetchData() (map[string]interface{}, error) {
 	if err != nil {
 		fmt.Println(err)
 	}
-	req.Header.Add("Accept", "application/json")
+	req.Header.Add("Accept", "application/vnd.twitchtv.v5+json")
 	req.Header.Add("Client-ID", TwitchClientID)
 	resp, err := httpClient.Do(req)
 	if err != nil {
