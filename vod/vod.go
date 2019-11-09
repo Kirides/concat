@@ -17,7 +17,7 @@ const resolutionEnd = `"`
 
 const qualityStart = `VIDEO="`
 const qualityEnd = `"`
-const tokenAPILink = "https://api.twitch.tv/api/vods/%v/access_token?&client_id=%v"
+const tokenAPILinkv5 = "https://api.twitch.tv/api/vods/%v/access_token?&client_id=%v"
 
 // const usherAPILink = "https://usher.twitch.tv/vod/%v?nauthsig=%v&nauth=%v&allow_source=true"
 const usherAPILink = "https://usher.ttvnw.net/vod/%v?nauthsig=%v&nauth=%v&allow_source=true"
@@ -100,7 +100,7 @@ func (vod Vod) fetchData() (map[string]interface{}, error) {
 func (vod Vod) GetQualityOptions() ([]Quality, error) {
 	fmt.Println("Contacting Twitch Server")
 
-	sig, token, err := vod.AccessTokenAPI()
+	sig, token, err := vod.AccessTokenAPIv5()
 	if err != nil {
 		fmt.Println("Couldn't access twitch token api")
 		return nil, err
@@ -125,9 +125,9 @@ func (vod Vod) GetQualityOptions() ([]Quality, error) {
 	return vodQualities, nil
 }
 
-// AccessTokenAPI Returns the signature and token from a tokenAPILink signature and token are needed for accessing the usher api
-func (vod Vod) AccessTokenAPI() (string, string, error) {
-	resp, err := httpClient.Get(fmt.Sprintf(tokenAPILink, vod.ID, TwitchClientID))
+// AccessTokenAPIv5 Returns the signature and token from a tokenAPILink signature and token are needed for accessing the usher api
+func (vod Vod) AccessTokenAPIv5() (string, string, error) {
+	resp, err := httpClient.Get(fmt.Sprintf(tokenAPILinkv5, vod.ID, TwitchClientID))
 	if err != nil {
 		return "", "", err
 	}
@@ -156,7 +156,7 @@ func (vod Vod) GetEdgecastURLMap() map[string]string {
 }
 
 func (vod Vod) getEdgecastURLMap() (map[string]string, error) {
-	sig, token, err := vod.AccessTokenAPI()
+	sig, token, err := vod.AccessTokenAPIv5()
 	if err != nil {
 		return make(map[string]string), err
 	}
