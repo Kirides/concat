@@ -84,6 +84,9 @@ func startingChunk(sh int, sm int, ss int, target int) int {
 	return (startSeconds / target)
 }
 
+func chunkFmt(chunk int) string {
+	return fmt.Sprintf("%09d", chunk)
+}
 func downloadChunk(newpath string, edgecastBaseURL string, chunkNum string, chunkName string, vodID string) error {
 	if debug {
 		fmt.Printf("Downloading: %s\n", edgecastBaseURL+chunkName)
@@ -177,9 +180,9 @@ func createConcatFile(newpath string, chunkNum int, startChunk int, v vod.Vod) (
 	defer tempFile.Close()
 	concatBuf := bytes.NewBuffer(make([]byte, 0))
 	for i := startChunk; i < (startChunk + chunkNum); i++ {
-		s := strconv.Itoa(i)
 		concatBuf.WriteString("file '")
-		filePath, _ := filepath.Abs(newpath + "/" + v.ID + "_" + s + chunkFileExtension)
+		cur := i
+		filePath, _ := filepath.Abs(newpath + "/" + v.ID + "_" + chunkFmt(cur) + chunkFileExtension)
 		concatBuf.WriteString(filePath)
 		concatBuf.WriteRune('\'')
 		concatBuf.WriteRune('\n')
@@ -233,8 +236,8 @@ func ffmpegCombine(newpath string, chunkNum int, startChunk int, v vod.Vod) {
 func deleteChunks(newpath string, chunkNum int, startChunk int, vodID string) {
 	var del string
 	for i := startChunk; i < (startChunk + chunkNum); i++ {
-		s := strconv.Itoa(i)
-		del = filepath.Join(newpath, vodID+"_"+s+chunkFileExtension)
+		cur := i
+		del = filepath.Join(newpath, vodID+"_"+chunkFmt(cur)+chunkFileExtension)
 		err := os.Remove(del)
 		if err != nil && !os.IsNotExist(err) {
 			fmt.Println("Could not delete all chunks, try manually deleting them", err)
@@ -484,10 +487,10 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 	totalChunks = chunkNum
 	workChan := make(chan func() error, chunkNum)
 	for i := startChunk; i < startChunk+chunkNum; i++ {
-		s := strconv.Itoa(i)
 		n := m3u8Array[i]
+		cur := i
 		workChan <- func() error {
-			return downloadChunk(newpath, edgecastBaseURL, s, n, vodIDString)
+			return downloadChunk(newpath, edgecastBaseURL, chunkFmt(cur), n, vodIDString)
 		}
 	}
 	for i := 0; i < maximumConcurrency && i < cap(workChan); i++ {
