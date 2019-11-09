@@ -6,6 +6,7 @@ import (
 	"strconv"
 )
 
+// Parse parses the m3u8 file and returns urls and their durations
 func Parse(m3u8 string) ([]string, []float64, error) {
 	urls := readFileUris(m3u8)
 	durations, err := readFileDurations(m3u8)
