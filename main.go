@@ -9,21 +9,20 @@ import (
 	"io/ioutil"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/ArneVogel/concat/m3u8parser"
+	progressbar "github.com/schollz/progressbar/v3"
 
 	"github.com/ArneVogel/concat/vod"
-	"golang.org/x/crypto/ssh/terminal"
 )
 
 //new style of edgecast links: http://vod089-ttvnw.akamaized.net/1059582120fbff1a392a_reinierboortman_26420932624_719978480/chunked/highlight-180380104.m3u8
@@ -49,6 +48,7 @@ var debug bool
 var maximumConcurrency int
 var useVideoTitle bool
 var noProgress bool
+var pb *progressbar.ProgressBar
 
 var m sync.Once
 var ctxt, ctxtAbortFn = context.WithCancel(context.Background())
@@ -59,7 +59,7 @@ var wg sync.WaitGroup
 var httpClient = &http.Client{Timeout: time.Minute}
 
 var totalChunks int
-var chunksCompleted = 0
+var chunksCompleted int32 = 0
 
 var vodTimeFormat = "HH MM SS"
 
@@ -87,25 +87,33 @@ func startingChunk(sh int, sm int, ss int, target int) int {
 func chunkFmt(chunk int) string {
 	return fmt.Sprintf("%09d", chunk)
 }
-func downloadChunk(newpath string, edgecastBaseURL string, chunkNum string, chunkName string, vodID string) error {
+
+type inMemoryBuffer struct {
+	b *bytes.Buffer
+}
+
+func newInMemoryBuffer() *inMemoryBuffer {
+	return &inMemoryBuffer{
+		b: new(bytes.Buffer),
+	}
+}
+func (b *inMemoryBuffer) Reset() {
+	b.b.Reset()
+}
+func (b *inMemoryBuffer) Write(buf []byte) (int, error) {
+	n, err := b.b.Write(buf)
+	return n, err
+}
+func (b *inMemoryBuffer) Size() int64 {
+	return int64(len(b.Bytes()))
+}
+func (b *inMemoryBuffer) Bytes() []byte {
+	return b.b.Bytes()
+}
+func downloadChunk(edgecastBaseURL string, chunkNum string, chunkName string, vodID string, buf *inMemoryBuffer) error {
 	if debug {
 		fmt.Printf("Downloading: %s\n", edgecastBaseURL+chunkName)
 	}
-	filename := vodID + "_" + chunkNum + chunkFileExtension
-	downloadPath := filepath.Join(newpath, filename)
-	if _, err := os.Stat(downloadPath); !os.IsNotExist(err) {
-		chunksCompleted++
-		if debug {
-			fmt.Printf("Skipping %s. Reason: already downloaded.\n", edgecastBaseURL+chunkName)
-		}
-		return nil
-	}
-	tempPartPath := downloadPath + ".part"
-	resultFile, err := os.OpenFile(tempPartPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
-	if err != nil {
-		return fmt.Errorf("Could not create file '%s'", newpath+"/"+filename)
-	}
-	defer resultFile.Close()
 	retry := 0
 	for {
 		req, err := http.NewRequest("GET", edgecastBaseURL+chunkName, nil)
@@ -116,8 +124,8 @@ func downloadChunk(newpath string, edgecastBaseURL string, chunkNum string, chun
 			return fmt.Errorf("Could not reach %s: '%v'", edgecastBaseURL+chunkName, err)
 		}
 
-		if info, err := resultFile.Stat(); err == nil && info.Size() != 0 {
-			rangeHeader := "bytes=" + strconv.FormatInt(info.Size(), 10) + "-"
+		if buf.Size() != 0 {
+			rangeHeader := "bytes=" + strconv.FormatInt(buf.Size(), 10) + "-"
 			req.Header.Add("range", rangeHeader)
 		}
 
@@ -131,67 +139,29 @@ func downloadChunk(newpath string, edgecastBaseURL string, chunkNum string, chun
 		}
 		closer := func() {
 			resp.Body.Close()
-			resultFile.Close()
 		}
 		defer closer() // Ensure file will be closed
-		if _, err := io.Copy(resultFile, resp.Body); err != nil {
+		if _, err := io.Copy(buf, resp.Body); err != nil {
 			retry++
 			isCancelled := strings.Contains(err.Error(), "canceled")
 			if retry > maxRetryCount || isCancelled {
 				closer()
-				if err := os.Remove(tempPartPath); err != nil {
-					return fmt.Errorf("Could not delete partially downloaded file '%s'. %v", filename, err)
-				}
 				if isCancelled {
 					return nil
 				}
-				return fmt.Errorf("Could not download file '%s'. %v", filename, err)
+				return fmt.Errorf("Could not download chunk '%s'. %v", chunkNum, err)
 			}
 			fmt.Printf("Error downloading (retry: %d) file: %s\n", retry, edgecastBaseURL+chunkName)
 			continue
 		}
 		closer() // close file prior to moving
-		if err := os.Rename(tempPartPath, downloadPath); err != nil {
-			return fmt.Errorf("Could not rename file '%s'. %v", tempPartPath, err)
-		}
 		break
 	}
-	chunksCompleted++
+	atomic.AddInt32(&chunksCompleted, 1)
 	if !debug && !noProgress {
-		w, _, err := terminal.GetSize(int(os.Stdout.Fd()))
-		if err != nil {
-			w = 50
-		} else {
-			w -= 8 // Brackets + space + percentage-Value + percentage-sign + 1
-		}
-		paddingSize := w
-		percentage := float32(chunksCompleted) / float32(totalChunks)
-		pWidth := (float32(chunksCompleted) / float32(totalChunks)) * float32(paddingSize)
-		fmt.Printf("\r[%s%s] %3.0f%%", strings.Repeat("█", int(pWidth)), strings.Repeat("░", paddingSize-int(pWidth)), percentage*100)
+		pb.Add(1)
 	}
 	return nil
-}
-
-func createConcatFile(newpath string, chunkNum int, startChunk int, v vod.Vod) (*os.File, error) {
-	tempFile, err := ioutil.TempFile(newpath, "concat_"+v.ID)
-	if err != nil {
-		return nil, err
-	}
-	defer tempFile.Close()
-	concatBuf := bytes.NewBuffer(make([]byte, 0))
-	for i := startChunk; i < (startChunk + chunkNum); i++ {
-		concatBuf.WriteString("file '")
-		cur := i
-		filePath, _ := filepath.Abs(newpath + "/" + v.ID + "_" + chunkFmt(cur) + chunkFileExtension)
-		concatBuf.WriteString(filePath)
-		concatBuf.WriteRune('\'')
-		concatBuf.WriteRune('\n')
-	}
-	concat := concatBuf.String()
-	if _, err := tempFile.WriteString(concat); err != nil {
-		return nil, err
-	}
-	return tempFile, nil
 }
 
 func sanitizeFilename(fileName string) string {
@@ -201,48 +171,6 @@ func sanitizeFilename(fileName string) string {
 		sanitized = strings.Replace(sanitized, l, "", -1)
 	}
 	return sanitized
-}
-func ffmpegCombine(newpath string, chunkNum int, startChunk int, v vod.Vod) {
-	tempFile, err := createConcatFile(newpath, chunkNum, startChunk, v)
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	cleanUpQueue = append(cleanUpQueue, func() {
-		os.Remove(tempFile.Name())
-	})
-
-	videoName := v.ID
-	if useVideoTitle && v.Title != "" {
-		videoName = fmt.Sprintf(`%s_%s`, sanitizeFilename(v.Title), v.ID)
-	}
-
-	args := []string{"-f", "concat", "-safe", "0", "-i", tempFile.Name(), "-c", "copy", "-bsf:a", "aac_adtstoasc", "-fflags", "+genpts", fmt.Sprintf(`%s.mp4`, videoName)}
-
-	if debug {
-		fmt.Printf("Running ffmpeg: %s %s\n", ffmpegCMD, args)
-	}
-
-	cmd := exec.Command(ffmpegCMD, args...)
-	var errbuf bytes.Buffer
-	cmd.Stderr = &errbuf
-	err = cmd.Run()
-	if err != nil {
-		fmt.Println(errbuf.String())
-		fmt.Println("ffmpeg error")
-	}
-}
-
-func deleteChunks(newpath string, chunkNum int, startChunk int, vodID string) {
-	var del string
-	for i := startChunk; i < (startChunk + chunkNum); i++ {
-		cur := i
-		del = filepath.Join(newpath, vodID+"_"+chunkFmt(cur)+chunkFileExtension)
-		err := os.Remove(del)
-		if err != nil && !os.IsNotExist(err) {
-			fmt.Println("Could not delete all chunks, try manually deleting them", err)
-		}
-	}
 }
 
 func wrongInputNotification() {
@@ -290,13 +218,13 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 		fmt.Println(err)
 		return
 	}
-
+	fileName := vodIDString + ".ts"
 	if useVideoTitle {
-		formatString := `%s_%s.mp4`
+		formatString := `%s_%s.ts`
 		if vodStruct.Title == "" { // If for some reason, the title could not be fetched
-			formatString = `%s%s.mp4`
+			formatString = `%s%s.ts`
 		}
-		fileName := fmt.Sprintf(formatString, sanitizeFilename(vodStruct.Title), vodStruct.ID)
+		fileName = fmt.Sprintf(formatString, sanitizeFilename(vodStruct.Title), vodStruct.ID)
 		_, err := os.Stat(fileName)
 		if err == nil || !os.IsNotExist(err) {
 			fmt.Printf("Destination file \"%s\" already exists!\n", fileName)
@@ -463,45 +391,59 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 		return
 	}
 
-	newpath := filepath.Join(".", "_"+vodIDString)
-
-	err = os.MkdirAll(newpath, os.ModePerm)
-	if err != nil {
-		fmt.Println("Count't create directory")
-		os.Exit(1)
-	}
-	fmt.Printf("Created temp dir: %s\n", newpath)
-
-	cleanUpQueue = append(cleanUpQueue, func() {
-		fmt.Println("Deleting temp dir")
-		err := os.RemoveAll(newpath)
-		if err != nil {
-			fmt.Println("Error deleting temp dir in one step.")
-			fmt.Println("Deleting chunks")
-			deleteChunks(newpath, chunkNum, startChunk, vodIDString)
-			fmt.Println("Please delete remaining files manually.")
-		}
-	})
-
 	fmt.Println("Starting Download")
 	totalChunks = chunkNum
-	workChan := make(chan func() error, chunkNum)
+	workChan := make(chan func(*inMemoryBuffer) error, chunkNum)
+	nextChunk := int32(startChunk)
+
+	pb.ChangeMax(totalChunks)
+	outFile, err := os.Create(fileName)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	defer outFile.Close()
 	for i := startChunk; i < startChunk+chunkNum; i++ {
 		n := m3u8Array[i]
 		cur := i
-		workChan <- func() error {
-			return downloadChunk(newpath, edgecastBaseURL, chunkFmt(cur), n, vodIDString)
+		workChan <- func(buf *inMemoryBuffer) error {
+			buf.Reset()
+			err := downloadChunk(edgecastBaseURL, chunkFmt(cur), n, vodIDString, buf)
+			if err != nil {
+				return err
+			}
+			ticker := time.NewTicker(120 * time.Second)
+			defer ticker.Stop()
+
+			for int32(cur) != nextChunk {
+				select {
+				case <-ticker.C:
+					return fmt.Errorf("Waiting for consecutive parts took too long")
+				default:
+					time.Sleep(50 * time.Millisecond)
+				}
+			}
+			n, err := io.Copy(outFile, bytes.NewReader(buf.Bytes()))
+			if err != nil {
+				return err
+			}
+			if n != buf.Size() {
+				return fmt.Errorf("Not all bytes copied to outFile")
+			}
+			atomic.AddInt32(&nextChunk, 1)
+			return nil
 		}
 	}
 	for i := 0; i < maximumConcurrency && i < cap(workChan); i++ {
 		wg.Add(1)
 		workerID := i
-		go func(workQueue <-chan func() error, done <-chan struct{}) {
+		buf := newInMemoryBuffer()
+		go func(workQueue <-chan func(*inMemoryBuffer) error, done <-chan struct{}) {
 			defer wg.Done()
 			for {
 				select {
 				case fn := <-workQueue:
-					if err := fn(); err != nil {
+					if err := fn(buf); err != nil {
 						fmt.Printf("Worker %d: error: %v\n", workerID, err)
 						abortWork()
 						return
@@ -524,9 +466,6 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 		fmt.Println(err)
 		return
 	}
-
-	fmt.Println("\nCombining parts")
-	ffmpegCombine(newpath, chunkNum, startChunk, vodStruct)
 }
 
 func dbgPrintf(format string, a ...interface{}) (int, error) {
@@ -648,8 +587,19 @@ func main() {
 		fmt.Println("\nReceived abortion signal")
 		abortWork()
 	})
+	pb = progressbar.NewOptions(0,
+		progressbar.OptionClearOnFinish(),
+		progressbar.OptionFullWidth(),
+		progressbar.OptionShowCount(),
+		progressbar.OptionShowIts(),
+		progressbar.OptionThrottle(200*time.Millisecond),
+		progressbar.OptionUseANSICodes(true),
+		progressbar.OptionSetItsString("chunks"),
+	)
 
-	for _, vodID := range flag.Args() {
+	args := flag.Args()
+	for _, vodID := range args {
+		pb.Reset()
 		resetVars()
 		if vodID == standardVOD {
 			wrongInputNotification()
@@ -668,12 +618,13 @@ func main() {
 			printQualityOptions(qualityOptions)
 			os.Exit(0)
 		}
-
+		pb.Describe(vodID)
 		if start != vodTimeFormat && end != vodTimeFormat {
 			downloadPartVOD(vodID, start, end, quality)
 		} else {
 			downloadPartVOD(vodID, "0", "full", quality)
 		}
+		pb.Finish()
 
 		cleanUp()
 	}
