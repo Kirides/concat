@@ -7,7 +7,6 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
-	"reflect"
 	"regexp"
 	"strings"
 )
@@ -67,33 +66,34 @@ func GetVod(id string) (Vod, error) {
 	vod.apiMap = apiMap
 
 	if data, err := vod.fetchData(); err == nil {
-		title, ok := data["title"]
-		if ok && reflect.TypeOf(title).Kind() == reflect.String {
-			vod.Title = title.(string)
-		}
+		vod.Title = data.Title
 	}
 	return vod, nil
 }
 
-func (vod Vod) fetchData() (map[string]interface{}, error) {
+type vodDataJson struct {
+	Title string `json:"title"`
+}
+
+func (vod Vod) fetchData() (*vodDataJson, error) {
 	req, err := http.NewRequest("GET", "https://api.twitch.tv/kraken/videos/"+vod.ID, nil)
 	if err != nil {
 		fmt.Println(err)
 	}
 	req.Header.Add("Accept", "application/vnd.twitchtv.v5+json")
-	req.Header.Add("Client-ID", TwitchClientID)
+	req.Header.Add("Client-ID", "aokchnui2n8q38g0vezl9hq6htzy4c")
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	buf := bytes.NewBuffer(nil)
 	io.Copy(buf, resp.Body)
-	var jsonResult interface{}
+	var jsonResult vodDataJson
 	if err := json.Unmarshal(buf.Bytes(), &jsonResult); err != nil {
 		return nil, err
 	}
 
-	return jsonResult.(map[string]interface{}), nil
+	return &jsonResult, nil
 }
 
 // GetQualityOptions Returns all the possible quality options for this VOD
@@ -115,19 +115,19 @@ func (vod Vod) GetQualityOptions() ([]Quality, error) {
 	vodQualities := make([]Quality, 0)
 	for i := 0; i < qualityCount; i++ {
 		rs := strings.Index(respString, resolutionStart) + len(resolutionStart)
-		re := strings.Index(respString[rs:len(respString)], resolutionEnd) + rs
+		re := strings.Index(respString[rs:], resolutionEnd) + rs
 		qs := strings.Index(respString, qualityStart) + len(qualityStart)
-		qe := strings.Index(respString[qs:len(respString)], qualityEnd) + qs
+		qe := strings.Index(respString[qs:], qualityEnd) + qs
 
 		vodQualities = append(vodQualities, Quality{Resolution: respString[rs:re], Quality: respString[qs:qe]})
-		respString = respString[qe:len(respString)]
+		respString = respString[qe:]
 	}
 	return vodQualities, nil
 }
 
 // AccessTokenAPIv5 Returns the signature and token from a tokenAPILink signature and token are needed for accessing the usher api
 func (vod Vod) AccessTokenAPIv5() (string, string, error) {
-	resp, err := httpClient.Get(fmt.Sprintf(tokenAPILinkv5, vod.ID, TwitchClientID))
+	resp, err := httpClient.Get(fmt.Sprintf(tokenAPILinkv5, vod.ID, "kimne78kx3ncx6brgo4mv6wki5h1ko")) //TwitchClientID))
 	if err != nil {
 		return "", "", err
 	}
