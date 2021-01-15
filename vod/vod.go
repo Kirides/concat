@@ -18,14 +18,8 @@ const qualityStart = `VIDEO="`
 const qualityEnd = `"`
 const tokenAPILinkv5 = "https://api.twitch.tv/api/vods/%v/access_token?&client_id=%v"
 
-// const usherAPILink = "https://usher.twitch.tv/vod/%v?nauthsig=%v&nauth=%v&allow_source=true"
 const usherAPILink = "https://usher.ttvnw.net/vod/%v?nauthsig=%v&nauth=%v&allow_source=true"
 
-// TwitchClientID defines the ID used for interacting with the Twitch-API
-var TwitchClientID = ""
-
-// TwitchClientSecret defines the Client Secret used for interacting with the Twitch-API
-var TwitchClientSecret = ""
 var debug = false
 var httpClient = http.DefaultClient
 
@@ -40,6 +34,35 @@ type Vod struct {
 type Quality struct {
 	Resolution string
 	Quality    string
+}
+
+var (
+	persistedQueries = map[string]interface{}{
+		"PlaybackAccessToken": map[string]interface{}{
+			"version":    1,
+			"sha256Hash": "0828119ded1c13477966434e15800ff57ddacf13ba1911c129dc2200705b0712",
+		},
+	}
+)
+
+func makePlaybackAccessTokenQuery(vodID string) []byte {
+	q := map[string]interface{}{
+		"operationName": "PlaybackAccessToken",
+		"variables": map[string]interface{}{
+			"isLive":     false,
+			"login":      "",
+			"isVod":      true,
+			"vodID":      vodID,
+			"playerType": "channel_home_carousel",
+		},
+		"extensions": map[string]interface{}{
+			"persistedQuery": persistedQueries["PlaybackAccessToken"],
+		},
+	}
+
+	jsonData, _ := json.Marshal(q)
+
+	return jsonData
 }
 
 // GetM3U8ListForQuality ...
@@ -100,7 +123,7 @@ func (vod Vod) fetchData() (*vodDataJson, error) {
 func (vod Vod) GetQualityOptions() ([]Quality, error) {
 	fmt.Println("Contacting Twitch Server")
 
-	sig, token, err := vod.AccessTokenAPIv5()
+	sig, token, err := vod.accessTokenGQL()
 	if err != nil {
 		fmt.Println("Couldn't access twitch token api")
 		return nil, err
@@ -126,24 +149,9 @@ func (vod Vod) GetQualityOptions() ([]Quality, error) {
 }
 
 func (vod Vod) newGqlPlaybackAccessTokenRequest() (*http.Request, error) {
-	jsonData := fmt.Sprintf(`{
-		"operationName":"PlaybackAccessToken",
-		"variables":{
-			"isLive":false,
-			"login":"",
-			"isVod":true,
-			"vodID":"%s",
-			"playerType":"channel_home_carousel"
-		},
-		"extensions":{
-			"persistedQuery":{
-				"version":1,
-				"sha256Hash":"0828119ded1c13477966434e15800ff57ddacf13ba1911c129dc2200705b0712"
-			}
-		}
-	}`, vod.ID)
+	jsonData := makePlaybackAccessTokenQuery(vod.ID)
 
-	req, err := http.NewRequest("POST", "https://gql.twitch.tv/gql", strings.NewReader(jsonData))
+	req, err := http.NewRequest("POST", "https://gql.twitch.tv/gql", bytes.NewReader(jsonData))
 	if err != nil {
 		return nil, err
 	}
@@ -153,13 +161,13 @@ func (vod Vod) newGqlPlaybackAccessTokenRequest() (*http.Request, error) {
 }
 
 // AccessTokenAPIv5 Returns the signature and token from a tokenAPILink signature and token are needed for accessing the usher api
-func (vod Vod) AccessTokenAPIv5() (string, string, error) {
+func (vod Vod) accessTokenGQL() (string, string, error) {
 	req, err := vod.newGqlPlaybackAccessTokenRequest()
 	if err != nil {
 		return "", "", err
 	}
 
-	resp, err := httpClient.Do(req) //TwitchClientID))
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", "", err
 	}
@@ -169,26 +177,23 @@ func (vod Vod) AccessTokenAPIv5() (string, string, error) {
 		return "", "", err
 	}
 
-	// See https://blog.golang.org/json-and-go "Decoding arbitrary data"
-
+	type gqlVideoPlaybackAccessToken struct {
+		Value     string `json:"value"`
+		Signature string `json:"signature"`
+	}
+	type gqlResponseData struct {
+		VideoPlaybackAccessToken gqlVideoPlaybackAccessToken `json:"videoPlaybackAccessToken"`
+	}
 	type gqlResponse struct {
-		Data struct {
-			VideoPlaybackAccessToken struct {
-				Value     string `json:"value"`
-				Signature string `json:"signature"`
-				Typename  string `json:"__typename"`
-			} `json:"videoPlaybackAccessToken"`
-		} `json:"data"`
-		Extensions struct {
-			DurationMilliseconds int    `json:"durationMilliseconds"`
-			OperationName        string `json:"operationName"`
-			RequestID            string `json:"requestID"`
-		} `json:"extensions"`
+		Data gqlResponseData `json:"data"`
 	}
 	var data gqlResponse
 	err = json.Unmarshal(body, &data)
 	if err != nil {
 		return "", "", err
+	}
+	if data.Data.VideoPlaybackAccessToken.Signature == "" || data.Data.VideoPlaybackAccessToken.Value == "" {
+		return "", "", fmt.Errorf("Could not get acces token data")
 	}
 	return data.Data.VideoPlaybackAccessToken.Signature, data.Data.VideoPlaybackAccessToken.Value, err
 }
@@ -203,7 +208,7 @@ func (vod Vod) GetEdgecastURLMap() map[string]string {
 }
 
 func (vod Vod) getEdgecastURLMap() (map[string]string, error) {
-	sig, token, err := vod.AccessTokenAPIv5()
+	sig, token, err := vod.accessTokenGQL()
 	if err != nil {
 		return make(map[string]string), err
 	}

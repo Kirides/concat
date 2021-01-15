@@ -569,9 +569,6 @@ func main() {
 	flag.BoolVar(&noProgress, "no-progress", false, "Do not display progressbar while download")
 	flag.Parse()
 
-	vod.TwitchClientID = os.Getenv("TWITCH_CLIENT_ID")
-	vod.TwitchClientSecret = os.Getenv("TWITCH_CLIENT_SECRET")
-
 	httpClient.Transport = &http.Transport{
 		MaxIdleConnsPerHost: maximumConcurrency,
 		// MaxIdleConns:        maximumConcurrency,
@@ -598,6 +595,7 @@ func main() {
 	)
 
 	args := flag.Args()
+	args = []string{"858739368"}
 	for _, vodID := range args {
 		pb.Reset()
 		resetVars()
