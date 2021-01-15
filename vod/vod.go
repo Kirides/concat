@@ -125,9 +125,41 @@ func (vod Vod) GetQualityOptions() ([]Quality, error) {
 	return vodQualities, nil
 }
 
+func (vod Vod) newGqlPlaybackAccessTokenRequest() (*http.Request, error) {
+	jsonData := fmt.Sprintf(`{
+		"operationName":"PlaybackAccessToken",
+		"variables":{
+			"isLive":false,
+			"login":"",
+			"isVod":true,
+			"vodID":"%s",
+			"playerType":"channel_home_carousel"
+		},
+		"extensions":{
+			"persistedQuery":{
+				"version":1,
+				"sha256Hash":"0828119ded1c13477966434e15800ff57ddacf13ba1911c129dc2200705b0712"
+			}
+		}
+	}`, vod.ID)
+
+	req, err := http.NewRequest("POST", "https://gql.twitch.tv/gql", strings.NewReader(jsonData))
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Client-Id", "kimne78kx3ncx6brgo4mv6wki5h1ko")
+	return req, nil
+}
+
 // AccessTokenAPIv5 Returns the signature and token from a tokenAPILink signature and token are needed for accessing the usher api
 func (vod Vod) AccessTokenAPIv5() (string, string, error) {
-	resp, err := httpClient.Get(fmt.Sprintf(tokenAPILinkv5, vod.ID, "kimne78kx3ncx6brgo4mv6wki5h1ko")) //TwitchClientID))
+	req, err := vod.newGqlPlaybackAccessTokenRequest()
+	if err != nil {
+		return "", "", err
+	}
+
+	resp, err := httpClient.Do(req) //TwitchClientID))
 	if err != nil {
 		return "", "", err
 	}
@@ -138,12 +170,27 @@ func (vod Vod) AccessTokenAPIv5() (string, string, error) {
 	}
 
 	// See https://blog.golang.org/json-and-go "Decoding arbitrary data"
-	var data interface{}
+
+	type gqlResponse struct {
+		Data struct {
+			VideoPlaybackAccessToken struct {
+				Value     string `json:"value"`
+				Signature string `json:"signature"`
+				Typename  string `json:"__typename"`
+			} `json:"videoPlaybackAccessToken"`
+		} `json:"data"`
+		Extensions struct {
+			DurationMilliseconds int    `json:"durationMilliseconds"`
+			OperationName        string `json:"operationName"`
+			RequestID            string `json:"requestID"`
+		} `json:"extensions"`
+	}
+	var data gqlResponse
 	err = json.Unmarshal(body, &data)
-	m := data.(map[string]interface{})
-	sig := fmt.Sprintf("%v", m["sig"])
-	token := fmt.Sprintf("%v", m["token"])
-	return sig, token, err
+	if err != nil {
+		return "", "", err
+	}
+	return data.Data.VideoPlaybackAccessToken.Signature, data.Data.VideoPlaybackAccessToken.Value, err
 }
 
 func SetDebug(v bool) {
