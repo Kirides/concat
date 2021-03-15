@@ -220,7 +220,7 @@ func (vod Vod) getEdgecastURLMap() (map[string]string, error) {
 		fmt.Printf("\nUsher API response:\n%s\n", respString)
 	}
 
-	var re = regexp.MustCompile(qualityStart + "([^\"]+)" + qualityEnd + "\n([^\n]+)\n")
+	var re = regexp.MustCompile(`VIDEO="([^"]+)".*\n([^\n]+)`)
 	match := re.FindAllStringSubmatch(respString, -1)
 
 	edgecastURLmap := make(map[string]string)
