@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -56,8 +57,17 @@ var closed = false
 var cleanUpQueue = make([]func(), 0)
 var done = make(chan struct{})
 var wg sync.WaitGroup
-var httpClient = &http.Client{Timeout: time.Minute}
-
+var httpClient = &http.Client{
+	Transport: &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout: 2500 * time.Millisecond, // TCP connect timeout
+		}).DialContext,
+		IdleConnTimeout:       60 * time.Second,
+		TLSHandshakeTimeout:   5 * time.Second,
+		ResponseHeaderTimeout: 5 * time.Second,
+		ExpectContinueTimeout: 5 * time.Second,
+	},
+}
 var totalChunks int
 var chunksCompleted int32 = 0
 
@@ -595,7 +605,7 @@ func main() {
 	)
 
 	args := flag.Args()
-	args = []string{"858739368"}
+	// args = []string{"898132500"}
 	for _, vodID := range args {
 		pb.Reset()
 		resetVars()
@@ -677,11 +687,11 @@ func abortWork() {
 }
 
 func handleInterrupt(onInterrupt func()) {
-	signalChan := make(chan os.Signal, 1)
-	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGKILL)
 
-	go func(c <-chan os.Signal) {
-		<-c
+	go func() {
+		defer cancel()
+		<-ctx.Done()
 		onInterrupt()
-	}(signalChan)
+	}()
 }
